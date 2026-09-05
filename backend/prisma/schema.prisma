@@ -1,0 +1,177 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================
+// Roles
+// =============================================
+model Role {
+  id        String     @id @default(uuid())
+  name      RoleName   @unique
+  userRoles UserRole[]
+
+  @@map("roles")
+}
+
+enum RoleName {
+  ADMIN
+  MANAGER
+  AUDITOR
+  USER
+}
+
+// =============================================
+// Users (indexed from blockchain / auth)
+// =============================================
+model User {
+  id            String     @id @default(uuid())
+  walletAddress String     @unique @map("wallet_address")
+  did           String?    @unique
+  displayName   String?    @map("display_name")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  userRoles     UserRole[]
+  ownedAssets   Asset[]    @relation("AssetOwner")
+  auditEvents   AuditEvent[]
+
+  @@map("users")
+}
+
+// =============================================
+// User <-> Role join
+// =============================================
+model UserRole {
+  userId    String   @map("user_id")
+  roleId    String   @map("role_id")
+  assignedAt DateTime @default(now()) @map("assigned_at")
+  assignedBy String? @map("assigned_by") // wallet address of the admin who assigned
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// =============================================
+// Assets (NFTs — confirmed by on-chain event)
+// =============================================
+model Asset {
+  id              String   @id @default(uuid())
+  tokenId         String   @unique @map("token_id") // on-chain token ID
+  ownerAddress    String   @map("owner_address")
+  ownerDID        String?  @map("owner_did")
+  metadataCID     String   @map("metadata_cid")      // IPFS CID
+  ipfsUri         String   @map("ipfs_uri")
+  contractAddress String   @map("contract_address")
+  assetType       String?  @map("asset_type")
+  name            String?
+  description     String?
+  status          AssetStatus @default(CONFIRMED)
+  mintedAt        DateTime? @map("minted_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  owner           User?    @relation("AssetOwner", fields: [ownerAddress], references: [walletAddress])
+  transactions    Transaction[]
+  auditEvents     AuditEvent[]
+
+  @@map("assets")
+}
+
+enum AssetStatus {
+  PENDING    // metadata uploaded, mint not yet confirmed
+  CONFIRMED  // NFTMinted event indexed
+  TRANSFERRED
+}
+
+// =============================================
+// Nonces (wallet login challenge)
+// =============================================
+model Nonce {
+  id            String   @id @default(uuid())
+  walletAddress String   @map("wallet_address")
+  nonce         String
+  expiresAt     DateTime @map("expires_at")
+  used          Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([walletAddress, nonce])
+  @@map("nonces")
+}
+
+// =============================================
+// Transactions (blockchain tx records)
+// =============================================
+model Transaction {
+  id          String          @id @default(uuid())
+  txHash      String          @unique @map("tx_hash")
+  type        TransactionType
+  fromAddress String?         @map("from_address")
+  toAddress   String?         @map("to_address")
+  tokenId     String?         @map("token_id")
+  blockNumber BigInt?         @map("block_number")
+  status      TxStatus        @default(CONFIRMED)
+  timestamp   DateTime?
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  asset       Asset?  @relation(fields: [tokenId], references: [tokenId])
+
+  @@map("transactions")
+}
+
+enum TransactionType {
+  DID_CREATED
+  ROLE_ASSIGNED
+  NFT_MINTED
+  TRANSFER
+  PERMISSION_UPDATED
+}
+
+enum TxStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+// =============================================
+// Audit Events (immutable tamper-proof log)
+// =============================================
+model AuditEvent {
+  id             String   @id @default(uuid())
+  eventType      String   @map("event_type")      // e.g. DIDCreated, NFTMinted
+  actorAddress   String?  @map("actor_address")
+  tokenId        String?  @map("token_id")
+  txHash         String?  @map("tx_hash")
+  blockNumber    BigInt?  @map("block_number")
+  logIndex       Int?     @map("log_index")
+  timestamp      DateTime?
+  dataJson       Json?    @map("data_json")         // full event data
+  eventIdentity  String   @unique @map("event_identity") // txHash_logIndex for idempotency
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user           User?    @relation(fields: [actorAddress], references: [walletAddress])
+  asset          Asset?   @relation(fields: [tokenId], references: [tokenId])
+
+  @@map("audit_events")
+}
+
+// =============================================
+// Indexer State (tracks last processed block)
+// =============================================
+model IndexerState {
+  id              String @id @default("singleton")
+  lastBlockNumber BigInt @default(0) @map("last_block_number")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("indexer_state")
+}

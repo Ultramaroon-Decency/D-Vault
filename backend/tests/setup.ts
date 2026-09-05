@@ -1,0 +1,19 @@
+// Set test environment variables before any module imports
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test_db';
+process.env.JWT_SECRET = 'test-jwt-secret-minimum-16-chars';
+process.env.JWT_EXPIRES_IN = '1h';
+process.env.NONCE_TTL_SECONDS = '300';
+process.env.BLOCKCHAIN_MOCK = 'true';
+process.env.IPFS_MOCK = 'true';
+process.env.PINATA_JWT = '';
+process.env.CORS_ORIGIN = 'http://localhost:3000';
+process.env.DID_REGISTRY_ADDRESS = '0x0000000000000000000000000000000000000001';
+process.env.RBAC_CONTRACT_ADDRESS = '0x0000000000000000000000000000000000000002';
+process.env.NFT_ASSET_ADDRESS = '0x0000000000000000000000000000000000000003';
+process.env.PORT = '5001';
+process.env.RPC_URL = 'https://sepolia.infura.io/v3/test';
+process.env.CHAIN_ID = '11155111';
+process.env.RATE_LIMIT_WINDOW_MS = '900000';
+process.env.RATE_LIMIT_MAX = '1000';
+process.env.AUTH_RATE_LIMIT_MAX = '100';

@@ -1,0 +1,38 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "account", "type": "address" },
+      { "indexed": true, "name": "role", "type": "bytes32" },
+      { "indexed": true, "name": "assignedBy", "type": "address" }
+    ],
+    "name": "RoleAssigned",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "account", "type": "address" },
+      { "indexed": true, "name": "role", "type": "bytes32" }
+    ],
+    "name": "PermissionUpdated",
+    "type": "event"
+  },
+  {
+    "inputs": [{ "name": "account", "type": "address" }],
+    "name": "getRole",
+    "outputs": [{ "name": "", "type": "bytes32" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "name": "account", "type": "address" },
+      { "name": "role", "type": "bytes32" }
+    ],
+    "name": "assignRole",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]

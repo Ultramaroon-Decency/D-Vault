@@ -1,0 +1,25 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "owner", "type": "address" },
+      { "indexed": false, "name": "did", "type": "string" }
+    ],
+    "name": "DIDCreated",
+    "type": "event"
+  },
+  {
+    "inputs": [{ "name": "owner", "type": "address" }],
+    "name": "getDID",
+    "outputs": [{ "name": "", "type": "string" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "name": "did", "type": "string" }],
+    "name": "registerDID",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
