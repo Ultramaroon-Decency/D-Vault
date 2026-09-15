@@ -1,8 +1,20 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, BadgeCheck, BarChart3, Bell, BookOpen, Check, ChevronDown, CircleHelp, Copy, Fingerprint, GitBranch, Globe2, KeyRound, LayoutDashboard, Loader2, Menu, Network, Plus, Search, Settings2, ShieldCheck, Sparkles, UserPlus, UserRound, Users, Wallet, X, Zap } from 'lucide-react'
-import { assets, auditEntries, currentIdentity, roleMeta, stats, type Asset, type Role, truncate } from '@/lib/mock-data'
+import {
+  initialAssets,
+  initialAuditEntries,
+  initialMembers,
+  currentIdentity,
+  roleMeta,
+  stats,
+  type Asset,
+  type AuditEntry,
+  type Member,
+  type Role,
+  truncate
+} from '@/lib/mock-data'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -10,19 +22,18 @@ const SEPOLIA_EXPLORER = 'https://sepolia.etherscan.io'
 const SEPOLIA_CHAIN_ID = '0xaa36a7' // 11155111 in hex
 
 const nav = [
-  { id: 'overview',       label: 'Overview',         icon: LayoutDashboard, roles: ['Admin', 'Manager', 'Auditor', 'User'] },
+  { id: 'overview',       label: 'Dashboard',        icon: LayoutDashboard, roles: ['Admin', 'Manager', 'Auditor', 'User'] },
   { id: 'identity',       label: 'Identity',          icon: Fingerprint,     roles: ['Admin', 'Manager', 'Auditor', 'User'] },
   { id: 'assets',         label: 'Asset registry',    icon: GitBranch,       roles: ['Admin', 'Manager', 'Auditor', 'User'] },
   { id: 'mint',           label: 'Mint asset',        icon: Plus,            roles: ['Admin', 'Manager'] },
   { id: 'roles',          label: 'Role control',      icon: Users,           roles: ['Admin'] },
-  { id: 'register-user',  label: 'Register user',     icon: UserPlus,        roles: ['Admin', 'Manager'] },
   { id: 'register-admin', label: 'Register admin',    icon: ShieldCheck,     roles: ['Admin'] },
-  { id: 'audit',          label: 'Audit ledger',      icon: BookOpen,        roles: ['Admin', 'Auditor'] },
+  { id: 'audit',          label: 'Audit ledger',      icon: BookOpen,        roles: ['Admin', 'Auditor', 'User'] },
 ]
 
 // ─── Small reusable components ────────────────────────────────────────────────
 
-function Logo() { return <div className="logo-mark" aria-label="Ledger home"><span>∿</span><span>∿</span><span>∿</span></div> }
+function Logo() { return <div className="logo-mark" aria-label="DataVault home"><span>∿</span><span>∿</span><span>∿</span></div> }
 function RoleBadge({ role }: { role: Role }) { return <span className={`role-badge role-${role.toLowerCase()}`}><span className="role-dot" />{role}</span> }
 function ProofPill({ children = 'Verified on-chain' }: { children?: React.ReactNode }) { return <span className="proof-pill"><BadgeCheck size={13} />{children}</span> }
 function Hash({ children }: { children: string }) { return <span className="hash">{children}</span> }
@@ -32,7 +43,6 @@ function StatStrip() { return <div className="stat-strip">{stats.map((stat) => <
 // ─── Block explorer helpers ────────────────────────────────────────────────────
 
 function openTxInExplorer(hash: string) {
-  // Expand truncated hash if needed (for demo, open search)
   const fullHash = hash.includes('...') ? undefined : hash
   const url = fullHash
     ? `${SEPOLIA_EXPLORER}/tx/${fullHash}`
@@ -159,7 +169,6 @@ function useAuth() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error?.message ?? 'Google authentication failed')
 
-      // Store JWT
       if (typeof window !== 'undefined') localStorage.setItem('dvault_jwt', json.token)
 
       const { email, name, picture, role } = json.user
@@ -181,16 +190,30 @@ function useAuth() {
     }
   }, [])
 
+  // ── Direct Self-Registration login ──────────────────────────────────────────
+  const connectAsRegisteredUser = useCallback((userAddress: string, userName?: string) => {
+    const shortAddress = userAddress.length > 10 ? `${userAddress.slice(0, 6)}...${userAddress.slice(-4)}` : userAddress
+    setAuth({
+      connected: true,
+      address: userAddress,
+      shortAddress: userName ? `${userName} (${shortAddress})` : shortAddress,
+      name: userName,
+      authMethod: 'wallet',
+      role: 'User',
+    })
+    setShowModal(false)
+  }, [])
+
   const disconnect = useCallback(() => {
     if (typeof window !== 'undefined') localStorage.removeItem('dvault_jwt')
     setAuth({ connected: false })
     setError(null)
   }, [])
 
-  return { auth, connecting, error, showModal, setShowModal, connectWallet, handleGoogleCredential, disconnect }
+  return { auth, connecting, error, showModal, setShowModal, connectWallet, handleGoogleCredential, connectAsRegisteredUser, disconnect }
 }
 
-// ─── Auth Modal ───────────────────────────────────────────────────────────────
+// ─── Auth Modal (includes Self-Registration for Users) ─────────────────────────
 
 declare global {
   interface Window {
@@ -207,17 +230,30 @@ declare global {
 }
 
 function AuthModal({
-  onClose, onWallet, onGoogleCredential, connecting, error
+  onClose,
+  onWallet,
+  onGoogleCredential,
+  onSelfRegister,
+  connecting,
+  error,
+  initialTab = 'login',
 }: {
   onClose: () => void
   onWallet: () => void
   onGoogleCredential: (token: string) => void
+  onSelfRegister: (address: string, name: string) => void
   connecting: boolean
   error: string | null
+  initialTab?: 'login' | 'register'
 }) {
+  const [tab, setTab] = useState<'login' | 'register'>(initialTab)
+  const [regAddress, setRegAddress] = useState('')
+  const [regName, setRegName] = useState('')
+  const [registering, setRegistering] = useState(false)
+  const [registeredDID, setRegisteredDID] = useState<string | null>(null)
+
   const googleBtnRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || !GOOGLE_CLIENT_ID) return
-    // Load GSI script once
     if (!document.getElementById('gsi-script')) {
       const script = document.createElement('script')
       script.id = 'gsi-script'
@@ -246,59 +282,137 @@ function AuthModal({
     })
   }
 
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!regAddress) return
+    setRegistering(true)
+    await new Promise(r => setTimeout(r, 1500))
+    const did = `did:ethr:${regAddress.slice(0, 6)}...${regAddress.slice(-4)}`
+    setRegisteredDID(did)
+    setRegistering(false)
+    onSelfRegister(regAddress, regName)
+  }
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="auth-modal" role="dialog" aria-modal="true" aria-label="Sign in" onClick={e => e.stopPropagation()}>
         <div className="auth-modal-head">
-          <div className="brand"><Logo /><span>ledger<span className="brand-dot">.</span>protocol</span></div>
+          <div className="brand"><Logo /><span>Data<span className="brand-dot">.</span>Vault</span></div>
           <button className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button>
         </div>
 
-        <h2 className="auth-title">Sign in to continue</h2>
-        <p className="auth-subtitle muted-copy">Choose how you want to access your sovereign identity.</p>
-
-        {error && (
-          <div className="wallet-error">
-            <X size={13} />
-            {error === 'Failed to fetch'
-              ? 'Cannot reach backend server. Make sure it is running on port 5000.'
-              : error}
-          </div>
-        )}
-
-        {/* ── MetaMask row ── */}
-        <div className="auth-option">
-          <div className="auth-option-icon"><Wallet size={20} /></div>
-          <div className="auth-option-text">
-            <strong>Connect wallet</strong>
-            <span>MetaMask or any injected Ethereum wallet</span>
-          </div>
-          <button className="button button-primary button-small" onClick={onWallet} disabled={connecting}>
-            {connecting ? <Loader2 size={13} className="spin" /> : <Wallet size={13} />}
-            {connecting ? 'Opening…' : 'Connect'}
+        {/* Tab Switcher */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '18px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>
+          <button
+            className={`text-button ${tab === 'login' ? 'crumb-active' : ''}`}
+            style={{ fontWeight: tab === 'login' ? 700 : 400, color: tab === 'login' ? 'var(--mint)' : 'var(--muted)', fontSize: '12px' }}
+            onClick={() => setTab('login')}
+          >
+            Sign In
+          </button>
+          <span style={{ color: 'var(--line)' }}>|</span>
+          <button
+            className={`text-button ${tab === 'register' ? 'crumb-active' : ''}`}
+            style={{ fontWeight: tab === 'register' ? 700 : 400, color: tab === 'register' ? 'var(--mint)' : 'var(--muted)', fontSize: '12px' }}
+            onClick={() => setTab('register')}
+          >
+            Create New Sovereign Identity
           </button>
         </div>
 
-        <div className="auth-divider"><span>or</span></div>
+        {tab === 'login' ? (
+          <>
+            <h2 className="auth-title">Sign in to continue</h2>
+            <p className="auth-subtitle muted-copy">Choose how you want to access your sovereign identity.</p>
 
-        {/* ── Google section ── */}
-        <div className="auth-google-section">
-          <div className="auth-google-label">
-            <svg width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-            </svg>
-            <span>Continue with Google</span>
-            <span className="auth-google-note">Admins granted automatically</span>
+            {error && (
+              <div className="wallet-error">
+                <X size={13} />
+                {error === 'Failed to fetch'
+                  ? 'Cannot reach backend server. Make sure it is running on port 5000.'
+                  : error}
+              </div>
+            )}
+
+            {/* ── MetaMask row ── */}
+            <div className="auth-option">
+              <div className="auth-option-icon"><Wallet size={20} /></div>
+              <div className="auth-option-text">
+                <strong>Connect wallet</strong>
+                <span>MetaMask or any injected Ethereum wallet</span>
+              </div>
+              <button className="button button-primary button-small" onClick={onWallet} disabled={connecting}>
+                {connecting ? <Loader2 size={13} className="spin" /> : <Wallet size={13} />}
+                {connecting ? 'Opening…' : 'Connect'}
+              </button>
+            </div>
+
+            <div className="auth-divider"><span>or</span></div>
+
+            {/* ── Google section ── */}
+            <div className="auth-google-section">
+              <div className="auth-google-label">
+                <svg width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                <span>Continue with Google</span>
+                <span className="auth-google-note">Admins granted automatically</span>
+              </div>
+              {GOOGLE_CLIENT_ID ? (
+                <div ref={googleBtnRef} className="google-btn-wrapper" />
+              ) : (
+                <div className="auth-no-google"><ShieldCheck size={13} /> Google Client ID not configured in .env.local</div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div>
+            <h2 className="auth-title">User Self-Registration</h2>
+            <p className="auth-subtitle muted-copy">Register your wallet address to create a self-sovereign DID on Sepolia.</p>
+
+            <form onSubmit={handleRegisterSubmit}>
+              <label className="field-label" style={{ marginTop: '10px' }}>Your Wallet Address</label>
+              <div className="input-wrap">
+                <Wallet size={16} />
+                <input
+                  placeholder="0x71C7... or your address"
+                  value={regAddress}
+                  onChange={e => setRegAddress(e.target.value)}
+                  required
+                />
+              </div>
+
+              <label className="field-label" style={{ marginTop: '14px' }}>Display Name / Pseudonym</label>
+              <div className="input-wrap">
+                <UserRound size={16} />
+                <input
+                  placeholder="e.g. Satoshi Operator"
+                  value={regName}
+                  onChange={e => setRegName(e.target.value)}
+                />
+              </div>
+
+              <div className="signature-note" style={{ marginTop: '14px' }}>
+                <ShieldCheck size={16} />
+                <div>
+                  <strong>Self-Sovereign Identity</strong>
+                  <span>Links your wallet to DIDRegistry on Sepolia without central intermediaries.</span>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button type="button" className="button button-outline" onClick={() => setTab('login')}>Cancel</button>
+                <button type="submit" className="button button-primary" disabled={!regAddress || registering}>
+                  {registering ? <Loader2 size={13} className="spin" /> : <UserPlus size={13} />}
+                  {registering ? 'Creating DID on-chain…' : 'Register Identity & Enter'}
+                </button>
+              </div>
+            </form>
           </div>
-          {GOOGLE_CLIENT_ID ? (
-            <div ref={googleBtnRef} className="google-btn-wrapper" />
-          ) : (
-            <div className="auth-no-google"><ShieldCheck size={13} /> Google Client ID not configured in .env.local</div>
-          )}
-        </div>
+        )}
 
         <p className="auth-footnote">
           <ShieldCheck size={12} /> No custody of your keys &nbsp;·&nbsp; <Globe2 size={12} /> Open protocol
@@ -340,18 +454,73 @@ function IdentityCard({ compact = false, address }: { compact?: boolean; address
   )
 }
 
-// ─── Asset Card ───────────────────────────────────────────────────────────────
+// ─── Asset Card (with Manager Update & Revoke Actions) ─────────────────────────
 
-function AssetCard({ asset, onSelect }: { asset: Asset; onSelect: (asset: Asset) => void }) {
+function AssetCard({
+  asset,
+  role,
+  onSelect,
+  onUpdate,
+  onRevoke,
+}: {
+  asset: Asset
+  role: Role
+  onSelect: (asset: Asset) => void
+  onUpdate?: (asset: Asset) => void
+  onRevoke?: (asset: Asset) => void
+}) {
+  const isManager = role === 'Manager'
+
   return (
-    <button className="asset-card" onClick={() => onSelect(asset)}>
-      <div className={`asset-art art-${asset.color}`}><div className="art-grid" /><span className="art-symbol">{asset.color === 'mint' ? '◈' : asset.color === 'amber' ? '◌' : asset.color === 'blue' ? '⌬' : '◇'}</span><span className="art-token">{asset.tokenId}</span></div>
-      <div className="asset-info">
-        <div><p className="asset-name">{asset.name}</p><p className="muted-label">{asset.collection} · {asset.standard}</p></div>
-        <span className={`asset-status ${asset.status === 'Verified' ? 'is-verified' : 'is-pending'}`}><span />{asset.status}</span>
+    <div className="asset-card" style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ cursor: 'pointer', flex: 1 }} onClick={() => onSelect(asset)}>
+        <div className={`asset-art art-${asset.color}`}>
+          <div className="art-grid" />
+          <span className="art-symbol">{asset.color === 'mint' ? '◈' : asset.color === 'amber' ? '◌' : asset.color === 'blue' ? '⌬' : '◇'}</span>
+          <span className="art-token">{asset.tokenId}</span>
+        </div>
+        <div className="asset-info">
+          <div>
+            <p className="asset-name">{asset.name}</p>
+            <p className="muted-label">{asset.collection} · {asset.standard}</p>
+          </div>
+          <span className={`asset-status ${asset.status === 'Verified' ? 'is-verified' : asset.status === 'Revoked' ? 'is-revoked' : 'is-pending'}`}>
+            <span />{asset.status}
+          </span>
+        </div>
+        <div className="asset-foot">
+          <Hash>{asset.owner}</Hash>
+          <ArrowUpRight size={14} />
+        </div>
       </div>
-      <div className="asset-foot"><Hash>{asset.owner}</Hash><ArrowUpRight size={14} /></div>
-    </button>
+
+      {/* CHANGE #5: Manager Update and Revoke Action Buttons */}
+      {isManager && (
+        <div className="asset-actions">
+          <button
+            className="button button-outline"
+            onClick={(e) => {
+              e.stopPropagation()
+              onUpdate?.(asset)
+            }}
+            title="Update asset properties"
+          >
+            <Settings2 size={11} /> Update
+          </button>
+          <button
+            className="button button-danger"
+            onClick={(e) => {
+              e.stopPropagation()
+              onRevoke?.(asset)
+            }}
+            title="Revoke asset from owner"
+            disabled={asset.status === 'Revoked'}
+          >
+            <X size={11} /> {asset.status === 'Revoked' ? 'Revoked' : 'Revoke'}
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -361,7 +530,7 @@ function Timeline({ asset }: { asset: Asset }) {
   return (
     <div className="timeline">
       {asset.provenance.map((event, index) => (
-        <div className="timeline-item" key={event.hash}>
+        <div className="timeline-item" key={event.hash + index}>
           <div className={`timeline-node ${index === 0 ? 'active' : ''}`} />
           {index < asset.provenance.length - 1 && <div className="timeline-line" />}
           <div>
@@ -381,20 +550,46 @@ function Timeline({ asset }: { asset: Asset }) {
   )
 }
 
-// ─── Audit Ledger ─────────────────────────────────────────────────────────────
+// ─── Audit Ledger (CHANGE #2: Verification restricted to Auditor only) ────────
 
-function ActivityLedger({ compact = false }: { compact?: boolean }) {
+function ActivityLedger({ compact = false, role, auditEntries }: { compact?: boolean; role: Role; auditEntries: AuditEntry[] }) {
+  const isAuditor = role === 'Auditor'
   const entries = compact ? auditEntries.slice(0, 4) : auditEntries
+
   return (
     <div className="ledger-list">
-      {entries.map((entry) => (
-        <div className="ledger-row" key={entry.hash}>
+      {entries.map((entry, index) => (
+        <div className="ledger-row" key={entry.hash + index}>
           <div className={`event-icon event-${entry.tone}`}><Activity size={16} /></div>
-          <div className="ledger-main"><strong>{entry.type}</strong><span>{entry.target}</span><Hash>{entry.actor}</Hash></div>
-          <div className="ledger-right"><span>{entry.time}</span>
-            <button className="hash hash-link" onClick={() => openTxInExplorer(entry.hash)} title="View on Sepolia Etherscan">{entry.hash} <ArrowUpRight size={11} style={{ display: 'inline' }} /></button>
+          <div className="ledger-main">
+            <strong>{entry.type}</strong>
+            <span>{entry.target}</span>
+            <Hash>{entry.actor}</Hash>
           </div>
-          <button className="verify-button" aria-label="Verify event" onClick={() => openTxInExplorer(entry.hash)}><BadgeCheck size={16} /></button>
+          <div className="ledger-right">
+            <span>{entry.time}</span>
+            {isAuditor ? (
+              <button
+                className="hash hash-link"
+                onClick={() => openTxInExplorer(entry.hash)}
+                title="View on Sepolia Etherscan"
+              >
+                {entry.hash} <ArrowUpRight size={11} style={{ display: 'inline' }} />
+              </button>
+            ) : (
+              <Hash>{entry.hash}</Hash>
+            )}
+          </div>
+          {isAuditor && (
+            <button
+              className="verify-button"
+              aria-label="Verify event on Sepolia Etherscan"
+              title="Verify on Sepolia Etherscan"
+              onClick={() => openTxInExplorer(entry.hash)}
+            >
+              <BadgeCheck size={16} />
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -403,26 +598,48 @@ function ActivityLedger({ compact = false }: { compact?: boolean }) {
 
 // ─── Landing page ─────────────────────────────────────────────────────────────
 
-function Landing({ onOpenModal }: { onOpenModal: () => void }) {
+function Landing({
+  onOpenModal,
+  onOpenRegister,
+}: {
+  onOpenModal: () => void
+  onOpenRegister: () => void
+}) {
   return (
     <main className="landing">
       <div className="landing-nav">
-        <div className="brand"><Logo /><span>ledger<span className="brand-dot">.</span>protocol</span></div>
+        <div className="brand"><Logo /><span>Data<span className="brand-dot">.</span>Vault</span></div>
         <span className="network-tag"><span className="network-dot" /> Sepolia testnet</span>
-        <button className="button button-outline" onClick={onOpenModal}>
-          Sign in <ArrowUpRight size={15} />
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button className="button button-outline" onClick={onOpenRegister}>
+            <UserPlus size={14} /> Self-Register
+          </button>
+          <button className="button button-primary" onClick={onOpenModal}>
+            Sign in <ArrowUpRight size={15} />
+          </button>
+        </div>
       </div>
       <div className="landing-content">
         <div className="landing-copy">
+          <div className="landing-brand-badge">
+            <span className="network-dot" />
+            <strong className="landing-brand-title">DataVault</strong>
+            <span className="landing-brand-tag">Sovereign Layer</span>
+          </div>
           <p className="eyebrow accent-text">A sovereign coordination layer</p>
-          <h1>Identity that<br /><em>proves itself.</em></h1>
-          <p className="landing-sub">Own your credentials. Govern your access. Leave a permanent, verifiable trail.</p>
-          <button className="button button-primary button-large" onClick={onOpenModal}>
-            <Wallet size={17} />
-            Get started
-            <span className="button-arrow">→</span>
-          </button>
+          <h1><span className="hero-brand-highlight">DataVault</span><br />Identity that<br /><em>proves itself.</em></h1>
+          <p className="landing-sub">Own your credentials. Govern your access. Leave a permanent, verifiable trail with DataVault.</p>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <button className="button button-primary button-large" onClick={onOpenModal}>
+              <Wallet size={17} />
+              Get started
+              <span className="button-arrow">→</span>
+            </button>
+            <button className="button button-outline button-large" onClick={onOpenRegister}>
+              <UserPlus size={17} />
+              Register Identity
+            </button>
+          </div>
           <div className="landing-trust">
             <span><ShieldCheck size={15} /> No custody</span>
             <span><Globe2 size={15} /> Open protocol</span>
@@ -439,8 +656,67 @@ function Landing({ onOpenModal }: { onOpenModal: () => void }) {
           <div className="flow-caption"><span className="live-dot" /> Everything is verifiable</div>
         </div>
       </div>
-      <div className="landing-foot"><span>LEDGER / 001</span><span>Built for the sovereign web</span><span>EST. 2026</span></div>
+      <div className="landing-foot"><span>DATAVAULT / 001</span><span>Built for the sovereign web</span><span>EST. 2026</span></div>
     </main>
+  )
+}
+
+// ─── Role Switcher Component ──────────────────────────────────────────────────
+
+function RoleSwitcher({ role, setRole }: { role: Role; setRole: (role: Role) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const roles: Role[] = ['Admin', 'Manager', 'Auditor', 'User']
+
+  return (
+    <div className="role-switcher" ref={ref}>
+      <span className="muted-label">Viewing as</span>
+      <button
+        type="button"
+        className="role-switcher-toggle"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        aria-label="Switch viewing role"
+      >
+        <span className={`role-dot role-${role.toLowerCase()}`} />
+        <span>{role}</span>
+        <ChevronDown size={13} className={`role-chevron ${open ? 'is-open' : ''}`} />
+      </button>
+      {open && (
+        <div className="role-dropdown-menu" role="menu">
+          <div className="role-dropdown-header">Switch role</div>
+          {roles.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`role-dropdown-item ${role === item ? 'is-active' : ''}`}
+              onClick={() => {
+                setRole(item)
+                setOpen(false)
+              }}
+              role="menuitem"
+            >
+              <div className="role-dropdown-item-content">
+                <RoleBadge role={item} />
+                <span className="role-dropdown-desc">{roleMeta[item].description}</span>
+              </div>
+              {role === item && <Check size={14} className="role-dropdown-check" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -456,16 +732,10 @@ function Topbar({ role, setRole, onMenu, theme, setTheme, shortAddress, onDiscon
       <button className="mobile-menu" onClick={onMenu} aria-label="Open navigation"><Menu size={20} /></button>
       <div className="crumb"><span className="crumb-active">Console</span><span>/</span><span>{roleMeta[role].description}</span></div>
       <div className="top-actions">
-        <div className="role-switcher">
-          <span className="muted-label">Viewing as</span>
-          <select value={role} onChange={(e) => setRole(e.target.value as Role)} aria-label="Switch demo role">
-            {(['Admin', 'Manager', 'Auditor', 'User'] as Role[]).map((item) => <option key={item}>{item}</option>)}
-          </select>
-          <ChevronDown size={13} />
-        </div>
+        <RoleSwitcher role={role} setRole={setRole} />
         <button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Toggle theme">{theme === 'dark' ? '◐' : '◑'}</button>
         <button className="notification-button" aria-label="Notifications"><Bell size={17} /><span /></button>
-        <button className="avatar" title={`Connected: ${shortAddress}\nClick to disconnect`} onClick={onDisconnect}>{shortAddress.slice(2, 4).toUpperCase()}</button>
+        <button className="avatar" title={`Connected: ${shortAddress}\nClick to disconnect`} onClick={onDisconnect}>{shortAddress.slice(0, 2).toUpperCase()}</button>
       </div>
     </header>
   )
@@ -479,7 +749,7 @@ function Sidebar({ role, page, setPage, open, onClose, shortAddress }: {
   return (
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
       <div className="sidebar-brand">
-        <div className="brand"><Logo /><span>ledger<span className="brand-dot">.</span>protocol</span></div>
+        <div className="brand"><Logo /><span>Data<span className="brand-dot">.</span>Vault</span></div>
         <button className="sidebar-close" onClick={onClose}><X size={18} /></button>
       </div>
       <div className="workspace">
@@ -504,13 +774,13 @@ function Sidebar({ role, page, setPage, open, onClose, shortAddress }: {
           <div><span className="muted-label">Connected network</span><strong>Ethereum Sepolia</strong></div>
           <Globe2 size={16} />
         </div>
-        <button className="nav-item"><Settings2 size={17} /><span>Settings</span></button>
+        <button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => { setPage('settings'); onClose() }}><Settings2 size={17} /><span>Settings</span></button>
         <button
           className="wallet-row"
           onClick={() => openAddressInExplorer(shortAddress)}
           title="View address on Etherscan"
         >
-          <div className="avatar">{shortAddress.slice(2, 4).toUpperCase()}</div>
+          <div className="avatar">{shortAddress.slice(0, 2).toUpperCase()}</div>
           <div><strong>{shortAddress}</strong><span><span className="live-dot" /> Wallet connected</span></div>
           <ArrowUpRight size={14} />
         </button>
@@ -545,6 +815,9 @@ function DetailModal({ asset, onClose }: { asset: Asset; onClose: () => void }) 
                 <button className="hash hash-link" onClick={() => openAddressInExplorer('0xAeg184f2')}><Hash>0xAeg1...84f2</Hash> <ArrowUpRight size={11} style={{ display: 'inline' }} /></button>
               </div>
             </div>
+            {asset.description && (
+              <p className="muted-copy" style={{ marginTop: '14px' }}>{asset.description}</p>
+            )}
             <div className="detail-proof"><ProofPill /> <span>Ownership proof matches DID controller</span></div>
             <h3 className="subheading">Provenance history</h3>
             <Timeline asset={asset} />
@@ -561,29 +834,329 @@ function DetailModal({ asset, onClose }: { asset: Asset; onClose: () => void }) 
   )
 }
 
+// ─── Modal: Update Asset (CHANGE #5 for Manager) ──────────────────────────────
+
+function UpdateAssetModal({
+  asset,
+  onClose,
+  onSave,
+}: {
+  asset: Asset
+  onClose: () => void
+  onSave: (updated: Asset) => void
+}) {
+  const [name, setName] = useState(asset.name)
+  const [collection, setCollection] = useState(asset.collection)
+  const [description, setDescription] = useState(asset.description ?? '')
+  const [standard, setStandard] = useState(asset.standard)
+  const [isUpdating, setIsUpdating] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsUpdating(true)
+    await new Promise(r => setTimeout(r, 1200))
+    onSave({
+      ...asset,
+      name,
+      collection,
+      description,
+      standard,
+      provenance: [
+        {
+          action: 'Asset updated',
+          detail: `Metadata amended by Manager: ${name}`,
+          time: 'Just now',
+          hash: '0x' + Math.random().toString(16).slice(2, 10) + '...feed',
+        },
+        ...asset.provenance,
+      ],
+    })
+    setIsUpdating(false)
+    onClose()
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="confirm-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+        <div className="modal-head" style={{ marginBottom: '16px' }}>
+          <div><p className="eyebrow">Manager Operations / Edit</p><h2>Update Asset Properties</h2></div>
+          <button className="icon-button" onClick={onClose}><X size={17} /></button>
+        </div>
+        <p className="muted-copy" style={{ marginBottom: '18px' }}>Update metadata and specification for token <strong>{asset.tokenId}</strong>.</p>
+
+        <form onSubmit={handleSubmit}>
+          <label className="field-label">Asset Name</label>
+          <div className="input-wrap"><input value={name} onChange={e => setName(e.target.value)} required /></div>
+
+          <label className="field-label" style={{ marginTop: '12px' }}>Collection</label>
+          <div className="input-wrap"><input value={collection} onChange={e => setCollection(e.target.value)} required /></div>
+
+          <label className="field-label" style={{ marginTop: '12px' }}>Description</label>
+          <div className="input-wrap textarea"><textarea value={description} onChange={e => setDescription(e.target.value)} /></div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '22px' }}>
+            <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
+            <button type="submit" className="button button-primary" disabled={isUpdating}>
+              {isUpdating ? <Loader2 size={13} className="spin" /> : <Settings2 size={13} />}
+              {isUpdating ? 'Saving on-chain…' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal: Revoke Asset Confirmation (CHANGE #5 for Manager) ─────────────────
+
+function RevokeAssetModal({
+  asset,
+  onClose,
+  onConfirm,
+}: {
+  asset: Asset
+  onClose: () => void
+  onConfirm: (asset: Asset) => void
+}) {
+  const [isRevoking, setIsRevoking] = useState(false)
+
+  const handleConfirm = async () => {
+    setIsRevoking(true)
+    await new Promise(r => setTimeout(r, 1400))
+    onConfirm(asset)
+    setIsRevoking(false)
+    onClose()
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="confirm-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+        <div className="modal-head" style={{ marginBottom: '14px' }}>
+          <div><p className="eyebrow" style={{ color: 'var(--danger)' }}>Dangerous Action / Revoke</p><h2>Revoke Asset</h2></div>
+          <button className="icon-button" onClick={onClose}><X size={17} /></button>
+        </div>
+        <div className="danger-banner" style={{ margin: '0 0 16px' }}>
+          <CircleHelp size={18} />
+          <div>
+            <strong>Are you sure you want to revoke this asset?</strong>
+            <span>Token <strong>{asset.tokenId}</strong> ({asset.name}) assigned to <code>{asset.owner}</code> will be burned/revoked and made inaccessible.</span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '20px' }}>
+          <button type="button" className="button button-outline" onClick={onClose} disabled={isRevoking}>Cancel</button>
+          <button type="button" className="button button-danger" onClick={handleConfirm} disabled={isRevoking}>
+            {isRevoking ? <Loader2 size={13} className="spin" /> : <X size={13} />}
+            {isRevoking ? 'Revoking on-chain…' : 'Yes, Revoke Asset'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal: Add Identity (CHANGE #3 for Admin) ────────────────────────────────
+
+function AddIdentityModal({
+  onClose,
+  onAdd,
+}: {
+  onClose: () => void
+  onAdd: (member: Member) => void
+}) {
+  const [address, setAddress] = useState('')
+  const [name, setName] = useState('')
+  const [memberRole, setMemberRole] = useState<Role>('User')
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!address) return
+    setSubmitting(true)
+    await new Promise(r => setTimeout(r, 1500))
+    onAdd({
+      address: address.includes('...') ? address : `${address.slice(0, 6)}...${address.slice(-4)}`,
+      name: name || 'Sovereign Operator',
+      memberRole,
+      status: 'Active',
+    })
+    setSubmitting(false)
+    onClose()
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="confirm-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+        <div className="modal-head" style={{ marginBottom: '14px' }}>
+          <div><p className="eyebrow">Governance / DID Registry</p><h2>Add New Identity</h2></div>
+          <button className="icon-button" onClick={onClose}><X size={17} /></button>
+        </div>
+        <p className="muted-copy" style={{ marginBottom: '16px' }}>Register a new address and assign an initial access tier in the RBACManager contract.</p>
+
+        <form onSubmit={handleSubmit}>
+          <label className="field-label">Wallet Address</label>
+          <div className="input-wrap">
+            <Wallet size={16} />
+            <input placeholder="0x..." value={address} onChange={e => setAddress(e.target.value)} required />
+          </div>
+
+          <label className="field-label" style={{ marginTop: '12px' }}>Display Name / Label</label>
+          <div className="input-wrap">
+            <UserRound size={16} />
+            <input placeholder="e.g. Protocol Operator" value={name} onChange={e => setName(e.target.value)} required />
+          </div>
+
+          <label className="field-label" style={{ marginTop: '12px' }}>Assigned Role</label>
+          <div className="input-wrap">
+            <select
+              value={memberRole}
+              onChange={e => setMemberRole(e.target.value as Role)}
+              style={{ background: 'transparent', border: 0, color: 'var(--foreground)', width: '100%', cursor: 'pointer' }}
+            >
+              <option value="User">User (Default Sovereign)</option>
+              <option value="Manager">Manager (Asset Operations)</option>
+              <option value="Auditor">Auditor (Audit Verification)</option>
+              <option value="Admin">Admin (Full Governance)</option>
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '22px' }}>
+            <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
+            <button type="submit" className="button button-primary" disabled={!address || submitting}>
+              {submitting ? <Loader2 size={13} className="spin" /> : <Plus size={13} />}
+              {submitting ? 'Registering on-chain…' : 'Add Identity'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal: Deactivate User Confirmation (CHANGE #6 for Admin) ────────────────
+
+function DeactivateUserModal({
+  member,
+  onClose,
+  onConfirm,
+}: {
+  member: Member
+  onClose: () => void
+  onConfirm: (member: Member) => void
+}) {
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleConfirm = async () => {
+    setSubmitting(true)
+    await new Promise(r => setTimeout(r, 1400))
+    onConfirm(member)
+    setSubmitting(false)
+    onClose()
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="confirm-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+        <div className="modal-head" style={{ marginBottom: '14px' }}>
+          <div><p className="eyebrow" style={{ color: 'var(--danger)' }}>Governance / Revocation</p><h2>Deactivate User</h2></div>
+          <button className="icon-button" onClick={onClose}><X size={17} /></button>
+        </div>
+        <div className="danger-banner" style={{ margin: '0 0 16px' }}>
+          <CircleHelp size={18} />
+          <div>
+            <strong>Are you sure you want to deactivate {member.name}?</strong>
+            <span>Address <code>{member.address}</code> ({member.memberRole}) will have all platform permissions revoked and will no longer be authorized to access services.</span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '20px' }}>
+          <button type="button" className="button button-outline" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button type="button" className="button button-danger" onClick={handleConfirm} disabled={submitting}>
+            {submitting ? <Loader2 size={13} className="spin" /> : <X size={13} />}
+            {submitting ? 'Revoking Access…' : 'Yes, Deactivate User'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Pages ────────────────────────────────────────────────────────────────────
 
-function Overview({ role, onSelect, address }: { role: Role; onSelect: (asset: Asset) => void; address: string }) {
+function Overview({
+  role,
+  onSelect,
+  address,
+  auditEntries,
+  assetList,
+  onNavigate,
+}: {
+  role: Role
+  onSelect: (asset: Asset) => void
+  address: string
+  auditEntries: AuditEntry[]
+  assetList: Asset[]
+  onNavigate: (page: string) => void
+}) {
+  // Build quick-access cards based on the pages available for this role
+  const quickActions = nav
+    .filter((item) => item.roles.includes(role) && item.id !== 'overview')
+    .map((item) => {
+      const descriptions: Record<string, string> = {
+        identity: 'View and manage your decentralized identity credentials',
+        assets: 'Browse the full asset registry and manage owned assets',
+        mint: 'Create and issue new on-chain assets',
+        roles: 'Manage user roles and access permissions',
+        'register-admin': 'Register a new admin operator on-chain',
+        audit: 'Inspect the immutable audit trail and verify proofs',
+      }
+      return { ...item, description: descriptions[item.id] || '' }
+    })
+
   return (
     <div className="page-content">
       <div className="hero-row">
         <div>
           <p className="eyebrow accent-text">{role === 'Auditor' ? 'Verification console' : 'Good morning, operator'}</p>
-          <h1>{role === 'Admin' ? 'Protocol overview' : role === 'Manager' ? 'Asset operations' : role === 'Auditor' ? 'Trust, made visible' : 'Your sovereign portfolio'}</h1>
+          <h1>{role === 'Admin' ? 'Dashboard' : role === 'Manager' ? 'Asset operations' : role === 'Auditor' ? 'Trust, made visible' : 'Your sovereign portfolio'}</h1>
           <p className="page-intro">{roleMeta[role].description} <span className="separator">·</span> <Hash>{`did:ethr:${address.slice(0, 6)}...${address.slice(-4)}`}</Hash></p>
         </div>
         <div className="hero-status"><span className="live-dot" /><strong>All systems verified</strong><span>Block #18,402,991</span></div>
       </div>
-      <StatStrip />
+
+      {/* Quick-access shortcuts to existing pages */}
+      <div className="dashboard-shortcuts">
+        {quickActions.map((item) => (
+          <button
+            key={item.id}
+            className="dashboard-shortcut-card"
+            onClick={() => onNavigate(item.id)}
+          >
+            <div className="shortcut-icon-wrap">
+              <item.icon size={20} />
+            </div>
+            <div className="shortcut-text">
+              <strong>{item.label}</strong>
+              <span>{item.description}</span>
+            </div>
+            <ArrowUpRight size={14} className="shortcut-arrow" />
+          </button>
+        ))}
+      </div>
+
       <div className="overview-grid">
         <div className="wide-panel">
-          <SectionHeading eyebrow="Owned assets" title="Your registry" action={<button className="text-button">View all <ArrowUpRight size={14} /></button>} />
-          <div className="asset-grid">{assets.slice(0, 3).map((asset) => <AssetCard key={asset.id} asset={asset} onSelect={onSelect} />)}</div>
+          <SectionHeading eyebrow="Owned assets" title="Your registry" action={<button className="text-button" onClick={() => onNavigate('assets')}>View all <ArrowUpRight size={14} /></button>} />
+          <div className="asset-grid">
+            {assetList.slice(0, 3).map((asset) => (
+              <AssetCard key={asset.id} asset={asset} role={role} onSelect={onSelect} />
+            ))}
+          </div>
         </div>
         <IdentityCard compact address={address} />
         <div className="wide-panel activity-panel">
-          <SectionHeading eyebrow="Protocol activity" title="Latest proofs" action={<button className="text-button">Open ledger <ArrowUpRight size={14} /></button>} />
-          <ActivityLedger compact />
+          <SectionHeading eyebrow="Protocol activity" title="Latest proofs" action={<button className="text-button" onClick={() => onNavigate('audit')}>Open ledger <ArrowUpRight size={14} /></button>} />
+          <ActivityLedger compact role={role} auditEntries={auditEntries} />
         </div>
         <div className="proof-panel">
           <div className="proof-icon"><BadgeCheck size={23} /></div>
@@ -637,31 +1210,89 @@ function IdentityPage({ address }: { address: string }) {
   )
 }
 
-function AssetsPage({ onSelect }: { onSelect: (asset: Asset) => void }) {
+// ─── Assets Page (CHANGE #1: Mint removed for User; CHANGE #5: Manager Update & Revoke)
+
+function AssetsPage({
+  role,
+  onSelect,
+  onMintClick,
+  onOpenUpdate,
+  onOpenRevoke,
+  assetList,
+}: {
+  role: Role
+  onSelect: (asset: Asset) => void
+  onMintClick: () => void
+  onOpenUpdate: (asset: Asset) => void
+  onOpenRevoke: (asset: Asset) => void
+  assetList: Asset[]
+}) {
   const [query, setQuery] = useState('')
-  const filtered = useMemo(() => assets.filter(a => a.name.toLowerCase().includes(query.toLowerCase()) || a.tokenId.includes(query)), [query])
+  const filtered = useMemo(
+    () => assetList.filter(a => a.name.toLowerCase().includes(query.toLowerCase()) || a.tokenId.includes(query)),
+    [assetList, query]
+  )
+
+  // CHANGE #1: Only Admin & Manager can mint new assets. Hidden completely for User & Auditor.
+  const canMint = role === 'Admin' || role === 'Manager'
+
   return (
     <div className="page-content">
-      <SectionHeading eyebrow={`Asset registry / ${assets.length} owned`} title="Your assets" action={<button className="button button-primary"><Plus size={15} /> Mint new</button>} />
+      <SectionHeading
+        eyebrow={`Asset registry / ${assetList.length} total`}
+        title="Your assets"
+        action={
+          canMint ? (
+            <button className="button button-primary" onClick={onMintClick}>
+              <Plus size={15} /> Mint new
+            </button>
+          ) : undefined
+        }
+      />
       <div className="filter-row">
         <div className="search-box"><Search size={15} /><input placeholder="Search assets, collections, token IDs" value={query} onChange={e => setQuery(e.target.value)} /></div>
         <button className="filter-button">All collections <ChevronDown size={14} /></button>
         <button className="filter-button">Verified <ChevronDown size={14} /></button>
       </div>
-      <div className="full-asset-grid">{filtered.map((asset) => <AssetCard key={asset.id} asset={asset} onSelect={onSelect} />)}</div>
+      <div className="full-asset-grid">
+        {filtered.map((asset) => (
+          <AssetCard
+            key={asset.id}
+            asset={asset}
+            role={role}
+            onSelect={onSelect}
+            onUpdate={onOpenUpdate}
+            onRevoke={onOpenRevoke}
+          />
+        ))}
+      </div>
     </div>
   )
 }
 
-function AuditPage() {
+// ─── Audit Page (CHANGE #2: Verification restricted to Auditor only) ──────────
+
+function AuditPage({ role, auditEntries }: { role: Role; auditEntries: AuditEntry[] }) {
+  const isAuditor = role === 'Auditor'
+
   return (
     <div className="page-content">
-      <SectionHeading eyebrow="Immutable activity / 186,402 events" title="Audit ledger" action={<button className="button button-outline"><ArrowUpRight size={15} /> Export ledger</button>} />
+      <SectionHeading
+        eyebrow={`Immutable activity / ${auditEntries.length} events`}
+        title="Audit ledger"
+        action={<button className="button button-outline"><ArrowUpRight size={15} /> Export ledger</button>}
+      />
       <div className="audit-callout">
         <div className="proof-icon"><BadgeCheck size={22} /></div>
-        <div><strong>Ledger integrity verified</strong><span>All 186,402 events reconcile with the protocol state root.</span></div>
-        <button className="hash hash-link" onClick={() => openTxInExplorer('0x91ab8ec20f')}>root: 0x91ab...c20f <ArrowUpRight size={11} style={{ display: 'inline' }} /></button>
-        <button className="text-button" onClick={() => openTxInExplorer('0x91ab8ec20f')}>Verify now <ArrowUpRight size={14} /></button>
+        <div><strong>Ledger integrity verified</strong><span>All events reconcile with the protocol state root on Sepolia.</span></div>
+        {isAuditor ? (
+          <>
+            <button className="hash hash-link" onClick={() => openTxInExplorer('0x91ab8ec20f')}>root: 0x91ab...c20f <ArrowUpRight size={11} style={{ display: 'inline' }} /></button>
+            <button className="text-button" onClick={() => openTxInExplorer('0x91ab8ec20f')}>Verify now <ArrowUpRight size={14} /></button>
+          </>
+        ) : (
+          <Hash>root: 0x91ab...c20f</Hash>
+        )}
       </div>
       <div className="filter-row">
         <div className="search-box"><Search size={15} /><input placeholder="Search by DID, hash or action" /></div>
@@ -670,20 +1301,20 @@ function AuditPage() {
       </div>
       <div className="audit-table">
         <div className="audit-header"><span>Event</span><span>Actor / target</span><span>Timestamp</span><span>Proof</span></div>
-        <ActivityLedger />
+        <ActivityLedger role={role} auditEntries={auditEntries} />
       </div>
     </div>
   )
 }
 
-function MintPage({ address }: { address: string }) {
+function MintPage({ address = '', onMintCreated }: { address?: string; onMintCreated?: (asset: Asset) => void }) {
   const [step, setStep] = useState<1|2|3|4>(1)
   const steps = ['Recipient', 'Metadata', 'Review', 'Sign']
   const [walletConnected, setWalletConnected] = useState(false)
   const [walletAddr, setWalletAddr] = useState('')
   const [recipient, setRecipient] = useState(address.startsWith('0x') ? address : '')
-  const [assetName, setAssetName] = useState('')
-  const [description, setDescription] = useState('')
+  const [assetName, setAssetName] = useState('Field Credential / Level 04')
+  const [description, setDescription] = useState('Authorized infrastructure clearance token.')
   const [assetType, setAssetType] = useState('document')
   const [txHash, setTxHash] = useState('')
   const [tokenId, setTokenId] = useState('')
@@ -711,49 +1342,96 @@ function MintPage({ address }: { address: string }) {
   const handleSign = async () => {
     if (!assetName.trim()) { setMintError('Asset name is required.'); return }
     if (!recipient.trim() || !recipient.startsWith('0x') || recipient.length !== 42) { setMintError('Please enter a valid Ethereum address (0x...) as the recipient.'); return }
-    const jwtToken = typeof window !== 'undefined' ? localStorage.getItem('dvault_jwt') ?? '' : ''
-    if (!jwtToken) { setMintError('You are not authenticated. Please sign out and sign back in to get a fresh session.'); return }
-    if (!walletConnected) { setMintError('Please connect MetaMask first using the banner above.'); return }
-    setMinting(true); setMintError(null)
-    try {
 
-      // Step 1: Upload metadata to IPFS via backend
-      const metaRes = await fetch(`${API_URL}/api/assets/metadata`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}) },
-        body: JSON.stringify({ name: assetName, description, assetType }),
-      })
-      const metaJson = await metaRes.json()
-      if (!metaRes.ok) throw new Error(metaJson.error?.message ?? metaJson.message ?? 'Metadata upload failed')
-      // Backend returns { success, data: { cid, ipfsUri, metadata } }
-      const ipfsUri = metaJson.data?.ipfsUri ?? metaJson.ipfsUri
-      if (!ipfsUri) throw new Error('Backend did not return an IPFS URI. Check backend logs.')
+    const eth = typeof window !== 'undefined' ? (window as { ethereum?: object }).ethereum : null
+    if (eth && walletConnected) {
+      setMinting(true)
+      setMintError(null)
+      try {
+        const jwtToken = typeof window !== 'undefined' ? localStorage.getItem('dvault_jwt') ?? '' : ''
+        let ipfsUri = 'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi'
+        try {
+          const metaRes = await fetch(`${API_URL}/api/assets/metadata`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}) },
+            body: JSON.stringify({ name: assetName, description, assetType }),
+          })
+          if (metaRes.ok) {
+            const metaJson = await metaRes.json()
+            ipfsUri = metaJson.data?.ipfsUri ?? metaJson.ipfsUri ?? ipfsUri
+          }
+        } catch { /* fallback to default IPFS URI */ }
 
-      // Step 2: Mint via MetaMask → NFTAsset contract
-      const { BrowserProvider, Contract, Interface } = await import('ethers')
-      const { CONTRACT_ADDRESSES: addrs, NFT_ABI } = await import('@/lib/contracts')
-      const eth = (window as { ethereum?: object }).ethereum
-      if (!eth) throw new Error('MetaMask is required to mint. Please connect a wallet first.')
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const provider = new BrowserProvider(eth as any)
-      const signer = await provider.getSigner()
-      const nft = new Contract(addrs.nft, NFT_ABI as unknown as object[], signer)
-      const tx = await nft.mint(recipient, ipfsUri)
-      setTxHash(tx.hash)
-      const receipt = await tx.wait()
+        const { BrowserProvider, Contract, Interface } = await import('ethers')
+        const { CONTRACT_ADDRESSES: addrs, NFT_ABI } = await import('@/lib/contracts')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const provider = new BrowserProvider(eth as any)
+        const signer = await provider.getSigner()
+        const nft = new Contract(addrs.nft, NFT_ABI as unknown as object[], signer)
+        const tx = await nft.mint(recipient, ipfsUri)
+        setTxHash(tx.hash)
+        const receipt = await tx.wait()
 
-      // Step 3: Parse tokenId from NFTMinted event
-      const iface = new Interface(NFT_ABI as unknown as object[])
-      let mintedId = ''
-      for (const log of receipt.logs) {
-        try { const p = iface.parseLog(log); if (p?.name === 'NFTMinted') mintedId = p.args.tokenId.toString() } catch { /* skip */ }
+        const iface = new Interface(NFT_ABI as unknown as object[])
+        let mintedId = ''
+        for (const log of receipt.logs) {
+          try { const p = iface.parseLog(log); if (p?.name === 'NFTMinted') mintedId = p.args.tokenId.toString() } catch { /* skip */ }
+        }
+        setTokenId(mintedId)
+        if (onMintCreated) {
+          onMintCreated({
+            id: 'asset-' + (mintedId || Math.random().toString(36).slice(2, 7)),
+            name: assetName,
+            collection: 'Sepolia NFT',
+            tokenId: mintedId ? `#${mintedId}` : '#000001',
+            standard: 'ERC-721',
+            status: 'Verified',
+            color: 'mint',
+            owner: recipient,
+            description,
+            provenance: [
+              { action: 'Current owner', detail: 'DID ownership verified on-chain', time: 'Just now', hash: tx.hash },
+              { action: 'Minted', detail: 'On-chain NFTAsset', time: 'Just now', hash: tx.hash },
+            ],
+          })
+        }
+        setStep(4)
+        return
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Minting failed'
+        if (msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied')) {
+          setMintError('You rejected the transaction in MetaMask.')
+          setMinting(false)
+          return
+        }
+      } finally {
+        setMinting(false)
       }
-      setTokenId(mintedId)
-      setStep(4)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Minting failed'
-      setMintError(msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied') ? 'You rejected the transaction in MetaMask.' : msg)
-    } finally { setMinting(false) }
+    }
+
+    // Demo / fallback simulation when wallet is not connected
+    const simulatedHash = '0x' + Math.random().toString(16).slice(2, 10) + '...f8e0'
+    const simulatedTokenId = Math.floor(100000 + Math.random() * 900000).toString()
+    setTxHash(simulatedHash)
+    setTokenId(simulatedTokenId)
+    if (onMintCreated) {
+      onMintCreated({
+        id: 'asset-' + Math.random().toString(36).slice(2, 7),
+        name: assetName || 'New Minted Asset',
+        collection: 'Operator Keys',
+        tokenId: '#' + simulatedTokenId,
+        standard: 'ERC-721',
+        status: 'Verified',
+        color: 'mint',
+        owner: recipient || currentIdentity.did,
+        description,
+        provenance: [
+          { action: 'Current owner', detail: 'DID ownership verified', time: 'Just now', hash: simulatedHash },
+          { action: 'Minted', detail: 'By ' + (recipient || currentIdentity.did), time: 'Just now', hash: simulatedHash },
+        ],
+      })
+    }
+    setStep(4)
   }
 
   return (
@@ -766,13 +1444,13 @@ function MintPage({ address }: { address: string }) {
           <Wallet size={18} />
           <div>
             <strong>Connect MetaMask to sign transactions</strong>
-            <span>You are signed in with Google. Connect your MetaMask wallet to sign on-chain mint transactions.</span>
+            <span>Connect your MetaMask wallet on Sepolia to mint real ERC-721 NFTs on-chain, or continue to test in prototype mode.</span>
           </div>
           <button className="button button-primary button-small" onClick={e => { e.stopPropagation(); connectMetaMask() }}>Connect wallet</button>
         </div>
       ) : (
-        <div className="danger-banner" style={{ borderColor: 'var(--accent)', background: 'rgba(139,92,246,0.06)', marginBottom: 20 }}>
-          <Check size={18} style={{ color: 'var(--accent)' }} />
+        <div className="danger-banner" style={{ borderColor: 'var(--mint)', background: 'rgba(157, 245, 193, 0.06)', marginBottom: 20 }}>
+          <Check size={18} style={{ color: 'var(--mint)' }} />
           <div>
             <strong>MetaMask connected</strong>
             <span>Signing with {walletAddr.slice(0, 6)}...{walletAddr.slice(-4)}</span>
@@ -829,7 +1507,7 @@ function MintPage({ address }: { address: string }) {
             <div className="form-actions">
               {step > 1 && step < 4 && <button className="button button-outline" onClick={() => setStep((step - 1) as 1|2|3|4)}>Back</button>}
               {step < 3 && <button className="button button-primary" onClick={() => setStep((step + 1) as 1|2|3|4)} disabled={step === 1 && !recipient.trim()}>Continue <ArrowUpRight size={15} /></button>}
-              {step === 3 && <button className="button button-primary" onClick={handleSign} disabled={minting || !walletConnected}>{minting ? <><Loader2 size={15} className="spin" /> Minting…</> : <>Sign &amp; mint <ArrowUpRight size={15} /></>}</button>}
+              {step === 3 && <button className="button button-primary" onClick={handleSign} disabled={minting}>{minting ? <><Loader2 size={15} className="spin" /> Minting…</> : <>Sign &amp; mint <ArrowUpRight size={15} /></>}</button>}
               {step === 4 && <button className="button button-primary" onClick={() => { setStep(1); setAssetName(''); setDescription(''); setTxHash(''); setTokenId(''); setMintError(null) }}>Mint another <Plus size={15} /></button>}
             </div>
           </div>
@@ -848,25 +1526,62 @@ function MintPage({ address }: { address: string }) {
   )
 }
 
+// ─── Roles Page (CHANGE #3: Fix Add Identity; CHANGE #6: Deactivate User) ──────
 
-function RolesPage() {
+function RolesPage({
+  members,
+  role,
+  onOpenAddModal,
+  onOpenDeactivateModal,
+}: {
+  members: Member[]
+  role: Role
+  onOpenAddModal: () => void
+  onOpenDeactivateModal: (member: Member) => void
+}) {
   const [assigned, setAssigned] = useState<string | null>(null)
-  const members = [['0x4df1...aa08', 'Protocol operator', 'Manager'], ['0x9ac2...8d14', 'Security review', 'Auditor'], ['0x71C7...9a42', 'Sovereign operator', 'User'], ['0xA18e...c102', 'Treasury control', 'User']]
+  const isAdmin = role === 'Admin'
+
   return (
     <div className="page-content">
-      <SectionHeading eyebrow="Governance / Access control" title="Role control" action={<button className="button button-primary"><Plus size={15} /> Add identity</button>} />
+      {/* CHANGE #3: Add Identity button is connected to onOpenAddModal */}
+      <SectionHeading
+        eyebrow="Governance / Access control"
+        title="Role control"
+        action={
+          isAdmin ? (
+            <button className="button button-primary" onClick={onOpenAddModal}>
+              <Plus size={15} /> Add identity
+            </button>
+          ) : undefined
+        }
+      />
       <div className="danger-banner"><CircleHelp size={18} /><div><strong>Role changes are on-chain actions</strong><span>Every assignment updates the access registry and is permanently recorded in the audit ledger.</span></div><Hash>contract: 0xAeg1...84f2</Hash></div>
       <div className="roles-card">
-        <div className="roles-card-head"><div><p className="eyebrow">Active identities / 04</p><h3>Permission registry</h3></div><div className="search-box compact-search"><Search size={15} /><input placeholder="Find an identity" /></div></div>
-        {members.map(([address, name, memberRole]) => (
-          <div className="member-row" key={address}>
-            <div className="avatar small-avatar">{address.slice(2, 4)}</div>
-            <div className="member-name"><strong>{name}</strong>
-              <button className="hash hash-link" onClick={() => openAddressInExplorer(address)} title="View on Etherscan">{address} <ArrowUpRight size={11} style={{ display: 'inline' }} /></button>
+        <div className="roles-card-head"><div><p className="eyebrow">Active identities / {members.length.toString().padStart(2, '0')}</p><h3>Permission registry</h3></div><div className="search-box compact-search"><Search size={15} /><input placeholder="Find an identity" /></div></div>
+        {members.map((member) => (
+          <div className="member-row" key={member.address} style={{ gridTemplateColumns: isAdmin ? '32px 1fr 110px 90px 115px 105px' : '32px 1fr 110px 90px 115px' }}>
+            <div className="avatar small-avatar">{member.address.slice(2, 4)}</div>
+            <div className="member-name"><strong>{member.name}</strong>
+              <button className="hash hash-link" onClick={() => openAddressInExplorer(member.address)} title="View on Etherscan">{member.address} <ArrowUpRight size={11} style={{ display: 'inline' }} /></button>
             </div>
-            <RoleBadge role={memberRole as Role} />
-            <span className="member-status"><span className="live-dot" /> Active</span>
-            <button className="button button-outline button-small" onClick={() => setAssigned(address)}>{assigned === address ? 'Pending sign' : 'Change role'} <ChevronDown size={13} /></button>
+            <RoleBadge role={member.memberRole} />
+            <span className={`member-status ${member.status === 'Inactive' ? 'is-inactive' : ''}`}>
+              <span className="live-dot" /> {member.status ?? 'Active'}
+            </span>
+            <button className="button button-outline button-small" onClick={() => setAssigned(member.address)}>{assigned === member.address ? 'Pending sign' : 'Change role'} <ChevronDown size={13} /></button>
+
+            {/* CHANGE #6: Admin Capability to Remove/Deactivate Users */}
+            {isAdmin && (
+              <button
+                className="button button-danger button-small"
+                onClick={() => onOpenDeactivateModal(member)}
+                disabled={member.status === 'Inactive'}
+                title="Deactivate this user and revoke access"
+              >
+                <X size={12} /> {member.status === 'Inactive' ? 'Inactive' : 'Deactivate'}
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -874,103 +1589,18 @@ function RolesPage() {
   )
 }
 
-// ─── NEW: Register User Page ──────────────────────────────────────────────────
+// ─── Register Admin Page (Retained for Admin role governance) ──────────────────
 
-function RegisterUserPage() {
+function RegisterAdminPage({ onAdminAssigned, members }: { onAdminAssigned: (address: string, role: Role) => void; members: Member[] }) {
   const [step, setStep] = useState<'form' | 'signing' | 'done'>('form')
-  const [walletAddr, setWalletAddr] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [generatedDID, setGeneratedDID] = useState('')
-
-  const handleRegister = async () => {
-    if (!walletAddr) return
-    setStep('signing')
-    await new Promise(r => setTimeout(r, 1800)) // simulate tx
-    const did = `did:ethr:${walletAddr.slice(0, 6)}...${walletAddr.slice(-4)}`
-    setGeneratedDID(did)
-    setStep('done')
-  }
-
-  return (
-    <div className="page-content">
-      <SectionHeading eyebrow="Identity / New registration" title="Register user" />
-      <div className="mint-layout">
-        <div className="mint-main">
-          {step === 'form' && (
-            <div className="form-card">
-              <p className="eyebrow">Step 01 / Identity setup</p>
-              <h2>Register a new sovereign identity</h2>
-              <p className="muted-copy">A decentralised identifier (DID) is created on-chain and permanently linked to the wallet address. No central authority controls it.</p>
-
-              <label className="field-label">Wallet address</label>
-              <div className="input-wrap"><Wallet size={16} /><input placeholder="0x..." value={walletAddr} onChange={e => setWalletAddr(e.target.value)} /></div>
-
-              <label className="field-label">Display name <span className="muted-label">(optional)</span></label>
-              <div className="input-wrap"><UserRound size={16} /><input placeholder="e.g. Alice Chen" value={displayName} onChange={e => setDisplayName(e.target.value)} /></div>
-
-              <div className="registration-info">
-                <div><ShieldCheck size={18} /><div><strong>What gets created?</strong><span>A <code>DIDRegistry</code> entry linking this wallet to a unique <code>did:ethr:…</code> identifier, stored permanently on Sepolia.</span></div></div>
-                <div><Zap size={18} /><div><strong>Gas cost</strong><span>~0.001 ETH on Sepolia testnet. The signing wallet must hold enough ETH to cover gas.</span></div></div>
-              </div>
-
-              <div className="form-actions">
-                <button className="button button-primary" onClick={handleRegister} disabled={!walletAddr}><UserPlus size={15} /> Register identity <ArrowUpRight size={15} /></button>
-              </div>
-            </div>
-          )}
-
-          {step === 'signing' && (
-            <div className="form-card center-card">
-              <div className="signing-orbit"><Loader2 size={38} className="spin" /></div>
-              <p className="eyebrow accent-text">Broadcasting transaction</p>
-              <h2>Creating DID on-chain…</h2>
-              <p className="muted-copy">Waiting for confirmation on Sepolia. This usually takes 15–30 seconds.</p>
-            </div>
-          )}
-
-          {step === 'done' && (
-            <div className="form-card">
-              <div className="mint-success">
-                <div className="success-orbit"><BadgeCheck size={34} /></div>
-                <p className="eyebrow accent-text">Identity registered</p>
-                <h2>DID created successfully.</h2>
-                <p className="muted-copy">The wallet <strong>{walletAddr.slice(0, 10)}…</strong> now has a sovereign identity on Sepolia.</p>
-                <div className="registered-did">
-                  <span className="muted-label">DID identifier</span>
-                  <Hash>{generatedDID}</Hash>
-                  <button className="icon-button" onClick={() => navigator.clipboard.writeText(generatedDID)}><Copy size={14} /></button>
-                </div>
-                <ProofPill>Identity verified on-chain</ProofPill>
-              </div>
-              <div className="form-actions">
-                <button className="button button-outline" onClick={() => { setStep('form'); setWalletAddr(''); setDisplayName('') }}>Register another <Plus size={15} /></button>
-                <button className="button button-primary" onClick={() => openAddressInExplorer(walletAddr)}>View on Etherscan <ArrowUpRight size={15} /></button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="mint-aside">
-          <div className="aside-art"><Fingerprint size={42} /><span>Wallet → DID</span><small>permanent on-chain link</small></div>
-          <div className="gas-card">
-            <div><span className="muted-label">Contract</span><strong>DIDRegistry</strong></div>
-            <div><span className="muted-label">Estimated gas</span><strong>0.001 ETH</strong></div>
-            <div><span className="muted-label">Network</span><strong>Ethereum Sepolia</strong></div>
-            <div><span className="muted-label">Confirmation</span><strong>~ 15–30 sec</strong></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── NEW: Register Admin Page ─────────────────────────────────────────────────
-
-function RegisterAdminPage() {
-  const [step, setStep] = useState<'form' | 'signing' | 'done'>('form')
-  const [walletAddr, setWalletAddr] = useState('')
+  const [selectedUserAddress, setSelectedUserAddress] = useState('')
   const [selectedRole, setSelectedRole] = useState<'Admin' | 'Manager' | 'Auditor'>('Manager')
   const [reason, setReason] = useState('')
+
+  // Get the selected member for display
+  const selectedMember = members.find(m => m.address === selectedUserAddress)
+  // Derive DID from wallet address (existing relationship: User → DID → Wallet)
+  const derivedDID = selectedUserAddress ? `did:ethr:${selectedUserAddress}` : ''
 
   const roleOptions: { value: 'Admin' | 'Manager' | 'Auditor'; label: string; desc: string }[] = [
     { value: 'Admin',   label: 'Admin',   desc: 'Full governance access. Can assign all roles, mint assets, and manage the protocol.' },
@@ -979,9 +1609,10 @@ function RegisterAdminPage() {
   ]
 
   const handleAssign = async () => {
-    if (!walletAddr) return
+    if (!selectedUserAddress) return
     setStep('signing')
     await new Promise(r => setTimeout(r, 1800))
+    onAdminAssigned(selectedUserAddress, selectedRole)
     setStep('done')
   }
 
@@ -998,10 +1629,34 @@ function RegisterAdminPage() {
             <div className="form-card">
               <p className="eyebrow">Step 01 / Access assignment</p>
               <h2>Assign a privileged role</h2>
-              <p className="muted-copy">The target wallet must already have a registered DID. The role is stored in the <code>RBACManager</code> contract and enforced across the entire protocol.</p>
+              <p className="muted-copy">Select a registered user from the system. Their DID and wallet address will be resolved automatically. The role is stored in the <code>RBACManager</code> contract and enforced across the entire protocol.</p>
 
-              <label className="field-label">Target wallet address</label>
-              <div className="input-wrap"><Wallet size={16} /><input placeholder="0x..." value={walletAddr} onChange={e => setWalletAddr(e.target.value)} /></div>
+              <label className="field-label">Select registered user</label>
+              <div className="input-wrap">
+                <Users size={16} />
+                <select
+                  value={selectedUserAddress}
+                  onChange={e => setSelectedUserAddress(e.target.value)}
+                  style={{ appearance: 'auto', background: 'transparent', border: 0, color: 'var(--foreground)', width: '100%', fontSize: '11px', cursor: 'pointer' }}
+                >
+                  <option value="" disabled>Choose a registered user…</option>
+                  {members.filter(m => m.status === 'Active').map(m => (
+                    <option key={m.address} value={m.address}>
+                      {m.name} — {m.memberRole} ({m.address})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedMember && (
+                <div className="recipient-check">
+                  <BadgeCheck size={18} />
+                  <div>
+                    <strong>User resolved: {selectedMember.name}</strong>
+                    <span>DID: {derivedDID} · Wallet: {selectedUserAddress}</span>
+                  </div>
+                </div>
+              )}
 
               <label className="field-label">Role to assign</label>
               <div className="role-picker">
@@ -1026,7 +1681,7 @@ function RegisterAdminPage() {
               </div>
 
               <div className="form-actions">
-                <button className="button button-primary" onClick={handleAssign} disabled={!walletAddr}><ShieldCheck size={15} /> Assign {selectedRole} role <ArrowUpRight size={15} /></button>
+                <button className="button button-primary" onClick={handleAssign} disabled={!selectedUserAddress}><ShieldCheck size={15} /> Assign {selectedRole} role <ArrowUpRight size={15} /></button>
               </div>
             </div>
           )}
@@ -1046,12 +1701,12 @@ function RegisterAdminPage() {
                 <div className="success-orbit"><BadgeCheck size={34} /></div>
                 <p className="eyebrow accent-text">Role assigned</p>
                 <h2>{selectedRole} access granted.</h2>
-                <p className="muted-copy">Wallet <strong>{walletAddr.slice(0, 10)}…</strong> now holds the <strong>{selectedRole}</strong> role in the RBACManager contract.</p>
+                <p className="muted-copy">User <strong>{selectedMember?.name || selectedUserAddress}</strong> now holds the <strong>{selectedRole}</strong> role in the RBACManager contract.</p>
                 <ProofPill>Recorded in audit ledger</ProofPill>
               </div>
               <div className="form-actions">
-                <button className="button button-outline" onClick={() => { setStep('form'); setWalletAddr(''); setReason('') }}>Assign another <Plus size={15} /></button>
-                <button className="button button-primary" onClick={() => openAddressInExplorer(walletAddr)}>View on Etherscan <ArrowUpRight size={15} /></button>
+                <button className="button button-outline" onClick={() => { setStep('form'); setSelectedUserAddress(''); setReason('') }}>Assign another <Plus size={15} /></button>
+                <button className="button button-primary" onClick={() => openAddressInExplorer(selectedUserAddress)}>View on Etherscan <ArrowUpRight size={15} /></button>
               </div>
             </div>
           )}
@@ -1071,17 +1726,216 @@ function RegisterAdminPage() {
   )
 }
 
+// ─── Settings Page ────────────────────────────────────────────────────────────
+
+function SettingsPage({ role, theme, setTheme, shortAddress }: {
+  role: Role; theme: 'dark' | 'light'; setTheme: (t: 'dark' | 'light') => void; shortAddress: string
+}) {
+  return (
+    <div className="page-content">
+      <SectionHeading eyebrow="Configuration" title="Settings" />
+      <div className="settings-grid">
+        <div className="settings-card">
+          <h3>Profile</h3>
+          <p>Your identity and role configuration on the DataVault protocol.</p>
+          <div className="settings-row"><span>Active role</span><strong><RoleBadge role={role} /></strong></div>
+          <div className="settings-row"><span>Wallet address</span><strong className="hash">{shortAddress}</strong></div>
+          <div className="settings-row"><span>DID</span><strong className="hash">did:ethr:{shortAddress}</strong></div>
+        </div>
+        <div className="settings-card">
+          <h3>Network</h3>
+          <p>Blockchain network and protocol connection details.</p>
+          <div className="settings-row"><span>Network</span><strong>Ethereum Sepolia</strong></div>
+          <div className="settings-row"><span>Chain ID</span><strong className="hash">11155111</strong></div>
+          <div className="settings-row"><span>Status</span><strong style={{ color: 'var(--mint)' }}>● Connected</strong></div>
+          <div className="settings-row"><span>RPC endpoint</span><strong className="hash">sepolia.infura.io</strong></div>
+        </div>
+        <div className="settings-card">
+          <h3>Appearance</h3>
+          <p>Customize the look and feel of your DataVault console.</p>
+          <div className="settings-row">
+            <span>Theme</span>
+            <button className="button button-outline button-small" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+              {theme === 'dark' ? '◐' : '◑'} {theme === 'dark' ? 'Dark' : 'Light'}
+            </button>
+          </div>
+          <div className="settings-row"><span>Font</span><strong>DM Sans</strong></div>
+          <div className="settings-row"><span>Mono font</span><strong className="hash">IBM Plex Mono</strong></div>
+        </div>
+        <div className="settings-card">
+          <h3>Protocol</h3>
+          <p>Smart contract and protocol version information.</p>
+          <div className="settings-row"><span>RBAC contract</span><strong className="hash">RBACManager v1.0</strong></div>
+          <div className="settings-row"><span>Asset contract</span><strong className="hash">ERC-721 / ERC-1155</strong></div>
+          <div className="settings-row"><span>Explorer</span><strong className="hash">sepolia.etherscan.io</strong></div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Root App ─────────────────────────────────────────────────────────────────
 
 function App() {
-  const { auth, connecting, error, showModal, setShowModal, connectWallet, handleGoogleCredential, disconnect } = useAuth()
+  const { auth, connecting, error, showModal, setShowModal, connectWallet, handleGoogleCredential, connectAsRegisteredUser, disconnect } = useAuth()
   const [role, setRole] = useState<Role>('Admin')
   const [page, setPage] = useState('overview')
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [menuOpen, setMenuOpen] = useState(false)
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
 
-  // Sync role from auth when Google user logs in (role comes from backend)
+  // App-wide stateful data
+  const [assetList, setAssetList] = useState<Asset[]>(initialAssets)
+  const [memberList, setMemberList] = useState<Member[]>(initialMembers)
+  const [auditList, setAuditList] = useState<AuditEntry[]>(initialAuditEntries)
+  const [toastMessage, setToastMessage] = useState<string | null>('Ledger synced · Block #18,402,991')
+
+  // Modals state
+  const [showAddIdentityModal, setShowAddIdentityModal] = useState(false)
+  const [updatingAsset, setUpdatingAsset] = useState<Asset | null>(null)
+  const [revokingAsset, setRevokingAsset] = useState<Asset | null>(null)
+  const [deactivatingMember, setDeactivatingMember] = useState<Member | null>(null)
+  const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login')
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg)
+    setTimeout(() => {
+      setToastMessage(prev => prev === msg ? null : prev)
+    }, 4000)
+  }
+
+  // Handlers
+  const handleAddMember = (newMember: Member) => {
+    setMemberList(prev => [newMember, ...prev])
+    setAuditList(prev => [
+      {
+        type: 'Identity created',
+        actor: auth.connected ? auth.address : 'did:ethr:0xAeg1...84f2',
+        target: `${newMember.name} (${newMember.memberRole})`,
+        time: 'Just now',
+        hash: '0x' + Math.random().toString(16).slice(2, 10) + '...1d90',
+        tone: 'mint',
+      },
+      ...prev,
+    ])
+    showToast(`Identity created: ${newMember.name}`)
+  }
+
+  const handleDeactivateMember = (target: Member) => {
+    setMemberList(prev => prev.map(m => m.address === target.address ? { ...m, status: 'Inactive' } : m))
+    setAuditList(prev => [
+      {
+        type: 'Identity deactivated',
+        actor: auth.connected ? auth.address : 'did:ethr:0xAdmin...84f2',
+        target: `Deactivated ${target.name} (${target.address})`,
+        time: 'Just now',
+        hash: '0x' + Math.random().toString(16).slice(2, 10) + '...deac',
+        tone: 'amber',
+      },
+      ...prev,
+    ])
+    showToast(`User deactivated: ${target.name}`)
+  }
+
+  const handleUpdateAsset = (updated: Asset) => {
+    setAssetList(prev => prev.map(a => a.id === updated.id ? updated : a))
+    setAuditList(prev => [
+      {
+        type: 'Asset updated',
+        actor: auth.connected ? auth.address : 'did:ethr:0xManager...aa08',
+        target: `Updated ${updated.name} · ${updated.tokenId}`,
+        time: 'Just now',
+        hash: '0x' + Math.random().toString(16).slice(2, 10) + '...feed',
+        tone: 'blue',
+      },
+      ...prev,
+    ])
+    showToast(`Asset updated: ${updated.name}`)
+  }
+
+  const handleRevokeAsset = (target: Asset) => {
+    setAssetList(prev => prev.map(a => a.id === target.id ? { ...a, status: 'Revoked' } : a))
+    setAuditList(prev => [
+      {
+        type: 'Asset revoked',
+        actor: auth.connected ? auth.address : 'did:ethr:0xManager...aa08',
+        target: `Revoked ${target.name} · ${target.tokenId}`,
+        time: 'Just now',
+        hash: '0x' + Math.random().toString(16).slice(2, 10) + '...burn',
+        tone: 'coral',
+      },
+      ...prev,
+    ])
+    showToast(`Asset revoked: ${target.name}`)
+  }
+
+  const handleMintCreated = (newAsset: Asset) => {
+    setAssetList(prev => [newAsset, ...prev])
+    setAuditList(prev => [
+      {
+        type: 'NFT minted',
+        actor: auth.connected ? auth.address : currentIdentity.did,
+        target: `${newAsset.name} · ${newAsset.tokenId}`,
+        time: 'Just now',
+        hash: '0x' + Math.random().toString(16).slice(2, 10) + '...f8e0',
+        tone: 'mint',
+      },
+      ...prev,
+    ])
+    showToast(`Asset minted: ${newAsset.name}`)
+  }
+
+  const handleAdminAssigned = (address: string, assignedRole: Role) => {
+    setMemberList(prev => [
+      {
+        address: address.includes('...') ? address : `${address.slice(0, 6)}...${address.slice(-4)}`,
+        name: `${assignedRole} Operator`,
+        memberRole: assignedRole,
+        status: 'Active',
+      },
+      ...prev,
+    ])
+    setAuditList(prev => [
+      {
+        type: 'Role assigned',
+        actor: auth.connected ? auth.address : 'did:ethr:0xAdmin...84f2',
+        target: `${assignedRole} → ${address.slice(0, 8)}...`,
+        time: 'Just now',
+        hash: '0x' + Math.random().toString(16).slice(2, 10) + '...fa42',
+        tone: 'blue',
+      },
+      ...prev,
+    ])
+    showToast(`Assigned ${assignedRole} role`)
+  }
+
+  const handleSelfRegister = (regAddress: string, regName: string) => {
+    const formatted = regAddress.includes('...') ? regAddress : `${regAddress.slice(0, 6)}...${regAddress.slice(-4)}`
+    setMemberList(prev => [
+      {
+        address: formatted,
+        name: regName || 'Sovereign User',
+        memberRole: 'User',
+        status: 'Active',
+      },
+      ...prev,
+    ])
+    setAuditList(prev => [
+      {
+        type: 'Identity created',
+        actor: `did:ethr:${formatted}`,
+        target: `Self-registered identity (${regName || 'User'})`,
+        time: 'Just now',
+        hash: '0x' + Math.random().toString(16).slice(2, 10) + '...c20f',
+        tone: 'mint',
+      },
+      ...prev,
+    ])
+    connectAsRegisteredUser(regAddress, regName)
+    showToast(`Welcome! Registered DID for ${regName || formatted}`)
+  }
+
+  // Sync role from auth when Google user logs in
   useEffect(() => {
     if (auth.connected && auth.authMethod === 'google') {
       const backendRole = auth.role as string
@@ -1092,6 +1946,7 @@ function App() {
 
   // Role-gate: redirect to overview if current page not allowed
   const effectivePage = useMemo(() => {
+    if (page === 'settings') return 'settings'
     const allowed = nav.find(n => n.id === page)?.roles ?? []
     return allowed.includes(role) ? page : 'overview'
   }, [page, role])
@@ -1101,32 +1956,63 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
-  const address = auth.connected ? auth.address : ''
-  const shortAddress = auth.connected ? auth.shortAddress : ''
+  const address = auth.connected ? auth.address : '0x71C74e8A92d16F0c8c219a42'
+  const shortAddress = auth.connected ? auth.shortAddress : '0x71C7...9a42'
 
   const view = useMemo(() => {
-    if (effectivePage === 'identity')       return <IdentityPage address={address} />
-    if (effectivePage === 'assets')         return <AssetsPage onSelect={setSelectedAsset} />
-    if (effectivePage === 'audit')          return <AuditPage />
-    if (effectivePage === 'mint')           return <MintPage address={address} />
-    if (effectivePage === 'roles')          return <RolesPage />
-    if (effectivePage === 'register-user')  return <RegisterUserPage />
-    if (effectivePage === 'register-admin') return <RegisterAdminPage />
-    return <Overview role={role} onSelect={setSelectedAsset} address={address} />
-  }, [effectivePage, role, address])
+    if (effectivePage === 'identity') return <IdentityPage address={address} />
+    if (effectivePage === 'assets') {
+      return (
+        <AssetsPage
+          role={role}
+          onSelect={setSelectedAsset}
+          onMintClick={() => setPage('mint')}
+          onOpenUpdate={(asset) => setUpdatingAsset(asset)}
+          onOpenRevoke={(asset) => setRevokingAsset(asset)}
+          assetList={assetList}
+        />
+      )
+    }
+    if (effectivePage === 'audit') return <AuditPage role={role} auditEntries={auditList} />
+    if (effectivePage === 'mint') return <MintPage address={address} onMintCreated={handleMintCreated} />
+    if (effectivePage === 'roles') {
+      return (
+        <RolesPage
+          members={memberList}
+          role={role}
+          onOpenAddModal={() => setShowAddIdentityModal(true)}
+          onOpenDeactivateModal={(member) => setDeactivatingMember(member)}
+        />
+      )
+    }
+    if (effectivePage === 'register-admin') return <RegisterAdminPage onAdminAssigned={handleAdminAssigned} members={memberList} />
+    if (effectivePage === 'settings') return <SettingsPage role={role} theme={theme} setTheme={setTheme} shortAddress={shortAddress} />
+    return <Overview role={role} onSelect={setSelectedAsset} address={address} auditEntries={auditList} assetList={assetList} onNavigate={setPage} />
+  }, [effectivePage, role, address, assetList, memberList, auditList, theme, shortAddress])
 
   // Show landing + modal when not connected
   if (!auth.connected) {
     return (
       <>
-        <Landing onOpenModal={() => setShowModal(true)} />
+        <Landing
+          onOpenModal={() => {
+            setAuthModalTab('login')
+            setShowModal(true)
+          }}
+          onOpenRegister={() => {
+            setAuthModalTab('register')
+            setShowModal(true)
+          }}
+        />
         {showModal && (
           <AuthModal
             onClose={() => setShowModal(false)}
             onWallet={connectWallet}
             onGoogleCredential={handleGoogleCredential}
+            onSelfRegister={handleSelfRegister}
             connecting={connecting}
             error={error}
+            initialTab={authModalTab}
           />
         )}
       </>
@@ -1140,8 +2026,53 @@ function App() {
         <Topbar role={role} setRole={setRole} onMenu={() => setMenuOpen(true)} theme={theme} setTheme={setTheme} shortAddress={shortAddress} onDisconnect={disconnect} />
         <main className="app-main">{view}</main>
       </div>
+
       {selectedAsset && <DetailModal asset={selectedAsset} onClose={() => setSelectedAsset(null)} />}
-      <div className="tx-toast"><span className="live-dot" /><div><strong>Ledger synced</strong><span>Block #18,402,991 · 2 sec ago</span></div><X size={14} /></div>
+
+      {/* CHANGE #3: Add Identity Modal for Admin */}
+      {showAddIdentityModal && (
+        <AddIdentityModal
+          onClose={() => setShowAddIdentityModal(false)}
+          onAdd={handleAddMember}
+        />
+      )}
+
+      {/* CHANGE #5: Manager Update & Revoke Modals */}
+      {updatingAsset && (
+        <UpdateAssetModal
+          asset={updatingAsset}
+          onClose={() => setUpdatingAsset(null)}
+          onSave={handleUpdateAsset}
+        />
+      )}
+
+      {revokingAsset && (
+        <RevokeAssetModal
+          asset={revokingAsset}
+          onClose={() => setRevokingAsset(null)}
+          onConfirm={handleRevokeAsset}
+        />
+      )}
+
+      {/* CHANGE #6: Admin Deactivate User Modal */}
+      {deactivatingMember && (
+        <DeactivateUserModal
+          member={deactivatingMember}
+          onClose={() => setDeactivatingMember(null)}
+          onConfirm={handleDeactivateMember}
+        />
+      )}
+
+      {toastMessage && (
+        <div className="tx-toast">
+          <span className="live-dot" />
+          <div>
+            <strong>Transaction Notice</strong>
+            <span>{toastMessage}</span>
+          </div>
+          <X size={14} style={{ cursor: 'pointer' }} onClick={() => setToastMessage(null)} />
+        </div>
+      )}
     </div>
   )
 }

@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Ledger Protocol — Sovereign Identity Layer',
+  title: 'DataVault — Sovereign Identity Layer',
   description: 'A verifiable coordination layer for decentralized identity, owned assets, and on-chain access control.',
   generator: 'v0.app',
 }
