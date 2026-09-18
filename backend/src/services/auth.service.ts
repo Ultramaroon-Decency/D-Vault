@@ -122,7 +122,7 @@ export const verifySignatureAndLogin = async (
     // 7. Issue JWT
     const payload: AuthenticatedUser = {
       userId: user.id,
-      walletAddress: user.walletAddress,
+      walletAddress: user.walletAddress!,
       did: user.did,
       role: resolvedRole,
     };
