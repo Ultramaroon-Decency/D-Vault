@@ -3,7 +3,7 @@
 
 const createMockMethod = () => jest.fn();
 
-export const prisma = {
+export const prisma: any = {
   nonce: {
     findFirst: createMockMethod(),
     create: createMockMethod(),
@@ -48,6 +48,12 @@ export const prisma = {
     findUnique: createMockMethod(),
     update: createMockMethod(),
   },
+  $transaction: jest.fn(async (cb: any) => {
+    if (typeof cb === 'function') {
+      return cb(prisma);
+    }
+    return Promise.all(cb);
+  }),
   $disconnect: createMockMethod(),
   $connect: createMockMethod(),
 };

@@ -3,6 +3,8 @@ import multer from 'multer';
 import { authenticate } from '../middleware/auth.middleware';
 import { requireManager } from '../middleware/rbac.middleware';
 import { validateAssetMetadata, validatePagination, checkValidation } from '../middleware/validation.middleware';
+import { validateUploadedFile } from '../middleware/fileValidation.middleware';
+import { Errors } from '../middleware/error.middleware';
 import * as assetController from '../controllers/asset.controller';
 
 const router = Router();
@@ -16,7 +18,7 @@ const upload = multer({
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only image/PDF files are allowed'));
+      cb(Errors.badRequest('Only image/PDF files are allowed'));
     }
   },
 });
@@ -27,6 +29,7 @@ router.post(
   authenticate,
   requireManager,
   upload.single('file'),
+  validateUploadedFile,
   validateAssetMetadata,
   checkValidation,
   assetController.prepareMetadata,

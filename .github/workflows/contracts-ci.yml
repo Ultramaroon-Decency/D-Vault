@@ -15,14 +15,14 @@ on:
       - main
       - develop
     paths:
-      - 'contracts/**'
+      - 'blockchain/**'
       - '.github/workflows/contracts-ci.yml'
   pull_request:
     branches:
       - main
       - develop
     paths:
-      - 'contracts/**'
+      - 'blockchain/**'
       - '.github/workflows/contracts-ci.yml'
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: contracts
+        working-directory: blockchain
 
     steps:
       - name: Checkout repository

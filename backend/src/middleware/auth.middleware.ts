@@ -24,7 +24,9 @@ export const authenticate = (req: Request, _res: Response, next: NextFunction): 
 
     let decoded: AuthenticatedUser;
     try {
-      decoded = jwt.verify(token, env.JWT_SECRET) as AuthenticatedUser;
+      decoded = jwt.verify(token, env.JWT_SECRET, {
+        algorithms: ['HS256'],
+      }) as AuthenticatedUser;
     } catch (jwtErr) {
       const msg =
         jwtErr instanceof jwt.TokenExpiredError

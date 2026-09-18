@@ -132,4 +132,19 @@ describe('RBAC Middleware', () => {
     expect(res.status).toBe(401);
     expect(res.body.error.message).toContain('Invalid token');
   });
+
+  it('should return 401 for a JWT signed with an unpinned algorithm (e.g. HS512)', async () => {
+    const tokenWrongAlg = jwt.sign(
+      { userId: 'user-id', walletAddress: '0x1234567890abcdef1234567890abcdef12345678', did: null, role: 'ADMIN' },
+      JWT_SECRET,
+      { algorithm: 'HS512' },
+    );
+
+    const res = await request(app)
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${tokenWrongAlg}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.message).toContain('Invalid token');
+  });
 });

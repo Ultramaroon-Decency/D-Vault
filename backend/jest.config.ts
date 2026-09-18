@@ -12,6 +12,7 @@ const config: Config = {
   clearMocks: true,
   restoreMocks: true,
   setupFiles: ['<rootDir>/tests/setup.ts'],
+  modulePathIgnorePatterns: ['<rootDir>/dist'],
   // Disable actual DB/blockchain in tests
   testTimeout: 15000,
 };
