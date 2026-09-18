@@ -84,7 +84,8 @@ export const ALLOWED_MIME_TYPES = [
  */
 export const validateUploadedFile = (req: Request, _res: Response, next: NextFunction): void => {
   if (!req.file) {
-    return next();
+    next();
+    return;
   }
 
   if (!req.file.buffer || req.file.buffer.length === 0) {

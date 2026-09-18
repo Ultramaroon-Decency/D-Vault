@@ -5,7 +5,7 @@ import { env } from '../config/env';
 import { Errors } from '../middleware/error.middleware';
 import { logAuthFailure } from '../utils/logger';
 import { AuthenticatedUser, AuthToken, NonceResponse } from '../types';
-import { RoleName } from '@prisma/client';
+import { RoleName, Prisma } from '@prisma/client';
 
 // Lazy getter so jest.mock('../db/prisma') works in tests
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -37,7 +37,7 @@ export const issueNonce = async (walletAddress: string): Promise<NonceResponse> 
   const expiresAt = new Date(Date.now() + NONCE_TTL_MS);
 
   // Invalidate existing unused nonces and create new one in an atomic transaction
-  await db().$transaction(async (tx: any) => {
+  await db().$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.nonce.updateMany({
       where: { walletAddress: normalized, used: false },
       data: { used: true },
@@ -66,7 +66,7 @@ export const verifySignatureAndLogin = async (
 ): Promise<AuthToken> => {
   const normalized = walletAddress.toLowerCase();
 
-  return await db().$transaction(async (tx: any) => {
+  return await db().$transaction(async (tx: Prisma.TransactionClient) => {
     // 1. Find active nonce inside transaction
     const nonceRecord = await tx.nonce.findFirst({
       where: {
