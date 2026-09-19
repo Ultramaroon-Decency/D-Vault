@@ -1,7 +1,7 @@
 # ==============================================================================
 # Frontend Preview Deployment (Vercel)
 #
-# Deploys frontend-web3/ to Vercel on every Pull Request modifying frontend code.
+# Deploys frontend/ to Vercel on every Pull Request modifying frontend code.
 # Builds with NEXT_PUBLIC_USE_MOCK_DATA=true so it functions independently of
 # live contracts and live backend endpoints.
 # ==============================================================================
@@ -14,7 +14,7 @@ on:
       - main
       - develop
     paths:
-      - 'frontend-web3/**'
+      - 'frontend/**'
       - '.github/workflows/deploy-frontend-preview.yml'
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: frontend-web3
+        working-directory: frontend
 
     steps:
       - name: Checkout repository
@@ -35,7 +35,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: frontend-web3/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
