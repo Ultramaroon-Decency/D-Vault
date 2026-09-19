@@ -23,6 +23,15 @@ export const verifyGoogleToken = [
       const { idToken } = req.body as { idToken: string };
       const result = await verifyGoogleTokenAndLogin(idToken);
 
+      // Set HttpOnly cookie for frontend
+      const maxAgeMs = 60 * 60 * 1000; // Assumes JWT_EXPIRES_IN is '1h'
+      res.cookie('dvault_token', result.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: maxAgeMs,
+      });
+
       res.json({
         success: true,
         token: result.token,

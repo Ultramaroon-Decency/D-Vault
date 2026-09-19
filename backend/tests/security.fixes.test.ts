@@ -134,6 +134,43 @@ describe('Security Fixes Verification Suite', () => {
   });
 
   // ============================================================================
+  // Asset Upload Rate Limiting
+  // ============================================================================
+  describe('Asset Upload Rate Limiting', () => {
+    const managerToken = makeToken('MANAGER');
+
+    it('should limit asset uploads and return 429 after exceeding limit', async () => {
+      const pngBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+      const limit = 5; // Matches test env setup ASSET_UPLOAD_RATE_LIMIT_MAX
+
+      for (let i = 0; i < limit; i++) {
+        const res = await request(app)
+          .post('/api/assets/metadata')
+          .set('Authorization', `Bearer ${managerToken}`)
+          .set('x-test-ip', '1.2.3.4')
+          .field('name', `Asset ${i}`)
+          .field('description', 'Test desc')
+          .field('assetType', 'LAND_TITLE')
+          .attach('file', pngBuffer, { filename: 'test.png', contentType: 'image/png' });
+        
+        expect(res.status).toBe(200);
+      }
+
+      const rateLimitedRes = await request(app)
+        .post('/api/assets/metadata')
+        .set('Authorization', `Bearer ${managerToken}`)
+        .set('x-test-ip', '1.2.3.4')
+        .field('name', 'Too Many Assets')
+        .field('description', 'Test desc')
+        .field('assetType', 'LAND_TITLE')
+        .attach('file', pngBuffer, { filename: 'test.png', contentType: 'image/png' });
+      
+      expect(rateLimitedRes.status).toBe(429);
+      expect(rateLimitedRes.body.error.message).toContain('Too many asset uploads');
+    });
+  });
+
+  // ============================================================================
   // Fix 3: Uploaded File Magic Bytes Validation
   // ============================================================================
   describe('Fix 3: Actual File Content (Magic Bytes) Verification', () => {

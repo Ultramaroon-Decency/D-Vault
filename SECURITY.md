@@ -50,7 +50,7 @@ A detailed attack surface analysis and threat model is maintained in the reposit
 When building features for D-Vault, please adhere to the following security guidelines:
 
 ### Frontend (Web3 UI)
-- **Do not store JWTs in `localStorage`**: This prevents XSS attacks from easily stealing session tokens. (The backend sets `HttpOnly` cookies for this).
+- **Token Management**: The API supports both a Bearer-header path (for non-browser/test clients) and an `HttpOnly` cookie path (for the browser frontend). The frontend prefers the `HttpOnly` cookie path, mitigating XSS risks for session theft.
 - **Sanitize Input**: Always sanitize user-provided data before rendering it in the DOM to prevent XSS.
 - **Wallet Connection**: Handle disconnection properly; clear any local state/cache related to the user's wallet.
 

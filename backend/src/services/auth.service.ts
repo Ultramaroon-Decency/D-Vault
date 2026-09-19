@@ -125,6 +125,7 @@ export const verifySignatureAndLogin = async (
       walletAddress: user.walletAddress!,
       did: user.did,
       role: resolvedRole,
+      jti: uuidv4(),
     };
 
     const token = jwt.sign(payload, env.JWT_SECRET, {
@@ -157,4 +158,21 @@ export const getMe = async (walletAddress: string): Promise<AuthenticatedUser & 
     did: user.did,
     role: resolvedRole,
   };
+};
+
+// =============================================
+// Revoke token on logout
+// =============================================
+export const revokeToken = async (
+  jti: string,
+  walletAddress: string,
+  expiresAt: Date
+): Promise<void> => {
+  await db().revokedToken.create({
+    data: {
+      jti,
+      walletAddress: walletAddress.toLowerCase(),
+      expiresAt,
+    },
+  });
 };

@@ -38,6 +38,7 @@ const envSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.string().default('900000').transform(Number),
   RATE_LIMIT_MAX: z.string().default('100').transform(Number),
   AUTH_RATE_LIMIT_MAX: z.string().default('10').transform(Number),
+  ASSET_UPLOAD_RATE_LIMIT_MAX: z.string().default('5').transform(Number),
 
   // Google OAuth
   GOOGLE_CLIENT_ID: z.string().default(''),

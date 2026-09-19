@@ -17,3 +17,4 @@ process.env.CHAIN_ID = '11155111';
 process.env.RATE_LIMIT_WINDOW_MS = '900000';
 process.env.RATE_LIMIT_MAX = '1000';
 process.env.AUTH_RATE_LIMIT_MAX = '100';
+process.env.ASSET_UPLOAD_RATE_LIMIT_MAX = '5';

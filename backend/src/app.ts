@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
@@ -12,6 +13,7 @@ import userRoutes from './routes/user.routes';
 import roleRoutes from './routes/role.routes';
 import assetRoutes from './routes/asset.routes';
 import auditRoutes from './routes/audit.routes';
+import securityLabRoutes from './routes/securityLab.routes';
 
 const app = express();
 
@@ -44,6 +46,7 @@ app.use(globalLimiter);
 // =============================================
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser());
 
 // =============================================
 // Request Logger
@@ -77,6 +80,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/security-lab', securityLabRoutes);
 
 // =============================================
 // Error Handling (must be last)

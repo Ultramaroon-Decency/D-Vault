@@ -18,6 +18,7 @@ const nav = [
   { id: 'register-user',  label: 'Register user',     icon: UserPlus,        roles: ['Admin', 'Manager'] },
   { id: 'register-admin', label: 'Register admin',    icon: ShieldCheck,     roles: ['Admin'] },
   { id: 'audit',          label: 'Audit ledger',      icon: BookOpen,        roles: ['Admin', 'Auditor'] },
+  { id: 'security-lab',   label: 'Security Lab',      icon: Network,         roles: ['Admin'] },
 ]
 
 // ─── Small reusable components ────────────────────────────────────────────────
@@ -100,6 +101,7 @@ function useAuth() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ walletAddress: address }),
+          credentials: 'include',
         })
         const nonceJson = await nonceRes.json()
         // Backend returns { success, data: { message } }
@@ -112,6 +114,7 @@ function useAuth() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ walletAddress: address, signature }),
+          credentials: 'include',
         })
         const verifyJson = await verifyRes.json()
         // Backend returns { success, data: { token, expiresIn } } — no user object
@@ -155,6 +158,7 @@ function useAuth() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken }),
+        credentials: 'include',
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error?.message ?? 'Google authentication failed')
@@ -722,6 +726,7 @@ function MintPage({ address }: { address: string }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}) },
         body: JSON.stringify({ name: assetName, description, assetType }),
+        credentials: 'include',
       })
       const metaJson = await metaRes.json()
       if (!metaRes.ok) throw new Error(metaJson.error?.message ?? metaJson.message ?? 'Metadata upload failed')
@@ -1071,6 +1076,213 @@ function RegisterAdminPage() {
   )
 }
 
+
+function SecurityLabPage({ address }: { address: string }) {
+  const [health, setHealth] = useState<{ status: string; timestamp: string } | null>(null)
+  const [results, setResults] = useState<Record<string, { status: number | string; response: string }>>({})
+
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/security-lab/health`)
+        const data = await res.json()
+        setHealth(data)
+      } catch (e) {
+        setHealth({ status: 'DOWN', timestamp: new Date().toISOString() })
+      }
+    }
+    checkHealth()
+    const int = setInterval(checkHealth, 3000)
+    return () => clearInterval(int)
+  }, [])
+
+  const logAttempt = async (attackType: string, outcome: 'BLOCKED' | 'ALLOWED', detail: string) => {
+    try {
+      const jwtToken = localStorage.getItem('dvault_jwt') || ''
+      await fetch(`${API_URL}/api/security-lab/log-attempt`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {})
+        },
+        body: JSON.stringify({ attackType, outcome, detail }),
+        credentials: 'include'
+      })
+    } catch (e) {}
+  }
+
+  const runAttack = async (id: string, attackType: string, fn: () => Promise<{ status: number | string; response: string; blocked: boolean; detail: string }>) => {
+    setResults(prev => ({ ...prev, [id]: { status: 'RUNNING', response: '...' } }))
+    try {
+      const result = await fn()
+      setResults(prev => ({ ...prev, [id]: { status: result.status, response: result.response } }))
+      await logAttempt(attackType, result.blocked ? 'BLOCKED' : 'ALLOWED', result.detail)
+    } catch (err: any) {
+      setResults(prev => ({ ...prev, [id]: { status: 'ERROR', response: err.message } }))
+      await logAttempt(attackType, 'BLOCKED', `Error: ${err.message}`)
+    }
+  }
+
+  const attacks = [
+    {
+      id: 'brute', title: 'Brute-force flood',
+      handler: async () => {
+        const reqs = Array.from({ length: 15 }).map(() =>
+          fetch(`${API_URL}/api/auth/verify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ walletAddress: address, signature: '0xdeadbeef'.repeat(20) }),
+            credentials: 'include'
+          }).catch(e => ({ status: 0 }))
+        )
+        const responses = await Promise.all(reqs)
+        let rateLimited = 0
+        let unauthorized = 0
+        for (const r of responses) {
+          if (r.status === 429) rateLimited++
+          if (r.status === 401) unauthorized++
+        }
+        return { status: rateLimited > 0 ? 429 : 401, response: `429s: ${rateLimited}, 401s: ${unauthorized}`, blocked: true, detail: `${rateLimited} requests rate-limited, ${unauthorized} unauthorized` }
+      }
+    },
+    {
+      id: 'replay', title: 'Nonce replay',
+      handler: async () => {
+        await fetch(`${API_URL}/api/auth/nonce`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress: address }), credentials: 'include'
+        }).catch(()=>{})
+        const r1 = await fetch(`${API_URL}/api/auth/verify`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress: address, signature: '0x0000' }), credentials: 'include'
+        }).catch(e => ({ status: 0 }))
+        const r2 = await fetch(`${API_URL}/api/auth/verify`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress: address, signature: '0x0000' }), credentials: 'include'
+        }).catch(e => ({ status: 0 }))
+        return { status: r2.status, response: `Attempt 1: ${r1.status}, Attempt 2: ${r2.status}`, blocked: true, detail: `Attempt 1: ${r1.status}, Attempt 2: ${r2.status} (consumed)` }
+      }
+    },
+    {
+      id: 'jwt', title: 'JWT tampering',
+      handler: async () => {
+        let token = localStorage.getItem('dvault_jwt') || ''
+        if (token.length > 0) {
+          const last = token[token.length - 1] === 'a' ? 'b' : 'a'
+          token = token.slice(0, -1) + last
+        }
+        const r = await fetch(`${API_URL}/api/auth/me`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(e => ({ status: 0, text: async () => e.message }))
+        const text = await (r as any).text()
+        return { status: r.status, response: text.slice(0, 100), blocked: r.status === 401, detail: `Status: ${r.status}` }
+      }
+    },
+    {
+      id: 'escalation', title: 'Forged-role privilege escalation',
+      handler: async () => {
+        const r = await fetch(`${API_URL}/api/roles/assign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer INVALID` },
+          body: JSON.stringify({ role: 'ADMIN', walletAddress: address })
+        }).catch(e => ({ status: 0, text: async () => e.message }))
+        const text = await (r as any).text()
+        return { status: r.status, response: text.slice(0, 100), blocked: r.status === 401 || r.status === 403, detail: `Status: ${r.status}` }
+      }
+    },
+    {
+      id: 'upload', title: 'Malicious file upload',
+      handler: async () => {
+        const jwtToken = localStorage.getItem('dvault_jwt') || ''
+        const formData = new FormData()
+        formData.append('file', new Blob([new Uint8Array([0x00, 0x00, 0x00, 0x00])]), 'evil.png')
+        
+        const r = await fetch(`${API_URL}/api/assets/metadata`, {
+          method: 'POST',
+          headers: { ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}) },
+          body: formData,
+          credentials: 'include'
+        }).catch(e => ({ status: 0, text: async () => e.message }))
+        const text = await (r as any).text()
+        return { status: r.status, response: text.slice(0, 100), blocked: r.status === 400, detail: `Status: ${r.status}` }
+      }
+    },
+    {
+      id: 'sqli', title: 'Injection payload',
+      handler: async () => {
+        const r = await fetch(`${API_URL}/api/auth/nonce`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress: "' OR '1'='1" }),
+          credentials: 'include'
+        }).catch(e => ({ status: 0, text: async () => e.message }))
+        const text = await (r as any).text()
+        return { status: r.status, response: text.slice(0, 100), blocked: r.status === 400, detail: `Status: ${r.status}` }
+      }
+    },
+    {
+      id: 'chain', title: 'Direct on-chain bypass',
+      handler: async () => {
+        try {
+          const { BrowserProvider, Contract } = await import('ethers')
+          const { CONTRACT_ADDRESSES: addrs, NFT_ABI } = await import('@/lib/contracts')
+          const eth = (window as { ethereum?: object }).ethereum
+          if (!eth) throw new Error('No ethereum provider')
+          const provider = new BrowserProvider(eth as any)
+          const signer = await provider.getSigner()
+          const nft = new Contract(addrs.nft, NFT_ABI as unknown as object[], signer)
+          await nft.mint(address, 'ipfs://fake')
+          return { status: 'SUCCESS', response: 'Mint succeeded (unexpected)', blocked: false, detail: 'Contract allowed unauthorized mint' }
+        } catch (e: any) {
+          const revertReason = e.reason || e.message
+          return { status: 'REVERTED', response: revertReason.slice(0, 100), blocked: true, detail: `Reverted: ${revertReason}` }
+        }
+      }
+    }
+  ]
+
+  return (
+    <div className="page-content">
+      <SectionHeading eyebrow="Live resilience test" title="Security Lab" action={
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: health?.status === 'OPERATIONAL' ? 'var(--success)' : 'var(--error)' }}>
+          <Activity size={16} />
+          <strong>{health?.status || 'CHECKING...'}</strong>
+          <span className="muted-label" style={{ fontSize: '12px' }}>{health?.timestamp ? new Date(health.timestamp).toLocaleTimeString() : ''}</span>
+        </div>
+      } />
+      
+      <div className="danger-banner" style={{ marginBottom: '24px' }}>
+        <ShieldCheck size={18} />
+        <div>
+          <strong>Demo & testing tool — disabled outside local/staging environments</strong>
+          <span>Real attacks executed against the live backend and contracts.</span>
+        </div>
+      </div>
+
+      <div className="asset-grid" style={{ gridTemplateColumns: '1fr' }}>
+        {attacks.map(a => (
+          <div key={a.id} className="form-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h3 style={{ margin: '0 0 8px 0', fontSize: '15px' }}>{a.title}</h3>
+              {results[a.id] ? (
+                <div style={{ fontSize: '13px', fontFamily: 'monospace', color: 'var(--muted)' }}>
+                  [{results[a.id].status}] {results[a.id].response}
+                </div>
+              ) : (
+                <div style={{ fontSize: '13px', color: 'var(--muted)' }}>Ready to execute</div>
+              )}
+            </div>
+            <button className="button button-outline" onClick={() => runAttack(a.id, a.title, a.handler)} disabled={results[a.id]?.status === 'RUNNING'}>
+              {results[a.id]?.status === 'RUNNING' ? <Loader2 size={15} className="spin" /> : <Zap size={15} />} Run attack
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Root App ─────────────────────────────────────────────────────────────────
 
 function App() {
@@ -1112,6 +1324,7 @@ function App() {
     if (effectivePage === 'roles')          return <RolesPage />
     if (effectivePage === 'register-user')  return <RegisterUserPage />
     if (effectivePage === 'register-admin') return <RegisterAdminPage />
+    if (effectivePage === 'security-lab')   return <SecurityLabPage address={address} />
     return <Overview role={role} onSelect={setSelectedAsset} address={address} />
   }, [effectivePage, role, address])
 

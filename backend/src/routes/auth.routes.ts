@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { getNonce, verify, getMe } from '../controllers/auth.controller';
+import { getNonce, verify, getMe, logout } from '../controllers/auth.controller';
 import { verifyGoogleToken } from '../controllers/googleAuth.controller';
 import { authenticate } from '../middleware/auth.middleware';
 import { env } from '../config/env';
@@ -34,6 +34,9 @@ router.post('/google/verify', authLimiter, ...verifyGoogleToken);
 // ── Profile ──────────────────────────────────────────────────────────────────
 // GET /api/auth/me       — Authenticated
 router.get('/me', authenticate, getMe);
+
+// POST /api/auth/logout  — Authenticated
+router.post('/logout', authenticate, logout);
 
 export default router;
 

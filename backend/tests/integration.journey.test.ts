@@ -29,6 +29,10 @@ describe('End-to-End Verification Journey', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPrisma.revokedToken = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn(),
+    };
   });
 
   // =========================================================================
