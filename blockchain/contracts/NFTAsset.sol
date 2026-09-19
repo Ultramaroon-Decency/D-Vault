@@ -4,6 +4,7 @@ pragma solidity ^0.8.27;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /**
  * @title NFTAsset
@@ -11,18 +12,20 @@ import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
  *         Only authorized users (Admin or Manager, verified via the RBAC contract)
  *         can mint new NFTs. Each NFT stores an IPFS metadata CID on-chain.
  *
- * @dev Inherits OpenZeppelin's ERC721, ERC721URIStorage, and ERC721Enumerable.
+ * @dev Inherits OpenZeppelin's ERC721, ERC721URIStorage, ERC721Enumerable, and Pausable.
  *      - Minting is gated by a call to the external RBAC contract's `canMint()`.
  *      - Emits a custom `NFTMinted` event alongside the standard ERC-721 `Transfer`.
  *      - Auto-incrementing token IDs starting from 1.
+ *      - Emergency pause/unpause is gated by `isAdmin()` on the RBAC contract.
  */
 
-/// @notice Interface for the RBAC contract's mint-check.
+/// @notice Interface for the RBAC contract's authorization checks.
 interface IRBACManager {
     function canMint(address account) external view returns (bool);
+    function isAdmin(address account) external view returns (bool);
 }
 
-contract NFTAsset is ERC721, ERC721URIStorage, ERC721Enumerable {
+contract NFTAsset is ERC721, ERC721URIStorage, ERC721Enumerable, Pausable {
 
     // ─── Storage ──────────────────────────────────────────────────────────────
 
@@ -45,6 +48,7 @@ contract NFTAsset is ERC721, ERC721URIStorage, ERC721Enumerable {
     // ─── Errors ───────────────────────────────────────────────────────────────
 
     error NotAuthorizedToMint(address caller);
+    error NotAuthorizedAdmin(address caller);
     error EmptyMetadataURI();
     error ZeroAddress();
 
@@ -52,6 +56,11 @@ contract NFTAsset is ERC721, ERC721URIStorage, ERC721Enumerable {
 
     modifier onlyMinter() {
         if (!rbac.canMint(msg.sender)) revert NotAuthorizedToMint(msg.sender);
+        _;
+    }
+
+    modifier onlyAdmin() {
+        if (!rbac.isAdmin(msg.sender)) revert NotAuthorizedAdmin(msg.sender);
         _;
     }
 
@@ -67,11 +76,24 @@ contract NFTAsset is ERC721, ERC721URIStorage, ERC721Enumerable {
         _nextTokenId = 1; // Start token IDs at 1
     }
 
+    // ─── Emergency Pause ──────────────────────────────────────────────────────
+
+    /// @notice Pause the contract. Only callable by an RBAC admin.
+    function pause() external onlyAdmin {
+        _pause();
+    }
+
+    /// @notice Unpause the contract. Only callable by an RBAC admin.
+    function unpause() external onlyAdmin {
+        _unpause();
+    }
+
     // ─── Minting ──────────────────────────────────────────────────────────────
 
     /**
      * @notice Mint a new NFT to the specified address with the given metadata URI.
      *         Only callable by users with ADMIN or MANAGER role (checked via RBAC).
+     *         Reverts if the contract is paused.
      *
      *         Used by the frontend's `useMintAsset` hook:
      *         `mint(to, metadataURI) → tokenId`
@@ -80,7 +102,7 @@ contract NFTAsset is ERC721, ERC721URIStorage, ERC721Enumerable {
      * @param metadataURI The IPFS URI of the NFT metadata (e.g. "ipfs://bafy...")
      * @return tokenId    The ID of the newly minted token.
      */
-    function mint(address to, string calldata metadataURI) external onlyMinter returns (uint256) {
+    function mint(address to, string calldata metadataURI) external onlyMinter whenNotPaused returns (uint256) {
         if (to == address(0)) revert ZeroAddress();
         if (bytes(metadataURI).length == 0) revert EmptyMetadataURI();
 

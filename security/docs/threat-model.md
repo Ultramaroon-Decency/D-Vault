@@ -40,9 +40,8 @@ The system consists of three distinct layers:
   - **Secret Entropy Enforcement**: In [`backend/src/config/env.ts`](file:///c:/Users/Rakshit%20Garg/Desktop/New%20folder/D-Vault/backend/src/config/env.ts#L16), Zod enforces `JWT_SECRET: z.string().min(16)`. The server process terminates during boot if a weak secret is provided.
   - **Expiration Enforcement**: In [`backend/src/middleware/auth.middleware.ts`](file:///c:/Users/Rakshit%20Garg/Desktop/New%20folder/D-Vault/backend/src/middleware/auth.middleware.ts#L27), `jwt.verify()` validates the `exp` claim. Expired tokens throw `jwt.TokenExpiredError` and are immediately rejected with HTTP 401.
 
-* **Identified Risks & Recommendations**:
-  - **Algorithm Confusion Risk**: `jwt.verify(token, env.JWT_SECRET)` does not explicitly specify `{ algorithms: ['HS256'] }`. If an attacker crafts a token with `"alg": "none"` or attempts an asymmetric-to-symmetric key confusion attack, certain legacy JWT implementations can be vulnerable.
-  - **Recommendation**: Explicitly pass `algorithms: ['HS256']` in `jwt.verify()` options within `auth.middleware.ts`.
+* **Mitigations Implemented & Verified**:
+  - **Algorithm Confusion Risk (RESOLVED)**: `jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] })` explicitly pins HS256 in [`backend/src/middleware/auth.middleware.ts`](file:///c:/Users/Rakshit%20Garg/Desktop/New%20folder/D-Vault/backend/src/middleware/auth.middleware.ts#L27). Tokens signed with `"alg": "none"` or unapproved algorithms (e.g. HS512, RS256) are rejected with HTTP 401.
 
 ---
 
@@ -55,17 +54,7 @@ The system consists of three distinct layers:
 * **Current Implementation & Strengths**:
   - **Time-Boxed Lifespan**: Nonces are governed by `NONCE_TTL_SECONDS` (default 300s). `expiresAt: { gt: new Date() }` is strictly enforced in the Prisma query.
   - **Single-Use Invalidation**: Upon issuing a new nonce, prior unconsumed nonces for that address are invalidated (`mockPrisma.nonce.updateMany({ used: true })`). When verified, the nonce is flagged `used: true`.
-
-* **Identified Risks & Recommendations**:
-  - **Concurrency / Race Condition Window**: In `verifySignatureAndLogin`, the query for `nonce.findFirst({ where: { used: false, ... } })` and the subsequent `nonce.update({ where: { id }, data: { used: true } })` occur in separate queries without an atomic lock or transaction. Two concurrent verification requests with the same signature could theoretically both read `used: false` before either sets `used: true`.
-  - **Recommendation**: Execute the check-and-update inside a Prisma interactive transaction (`prisma.$transaction`) or execute an atomic conditional update:
-    ```typescript
-    const updated = await prisma.nonce.updateMany({
-      where: { id: nonceRecord.id, used: false },
-      data: { used: true }
-    });
-    if (updated.count === 0) throw Errors.unauthorized('Nonce already consumed');
-    ```
+  - **Atomic Transaction & Race Condition Prevention (RESOLVED)**: Both nonce issuance and signature verification/consumption are wrapped in `db().$transaction(async (tx) => { ... })` in [`backend/src/services/auth.service.ts`](file:///c:/Users/Rakshit%20Garg/Desktop/New%20folder/D-Vault/backend/src/services/auth.service.ts). This eliminates concurrency windows and race condition replays.
 
 ---
 
@@ -121,15 +110,29 @@ The system consists of three distinct layers:
 
 ---
 
+### Surface 5: File Uploads & Magic Byte Content Verification
+
+* **Primary Code References**:
+  - [`backend/src/middleware/fileValidation.middleware.ts`](file:///c:/Users/Rakshit%20Garg/Desktop/New%20folder/D-Vault/backend/src/middleware/fileValidation.middleware.ts)
+  - [`backend/src/routes/asset.routes.ts`](file:///c:/Users/Rakshit%20Garg/Desktop/New%20folder/D-Vault/backend/src/routes/asset.routes.ts)
+
+* **Current Implementation & Strengths**:
+  - **Magic Bytes Validation**: While multer performs an initial check on the client-supplied `Content-Type` header, [`backend/src/middleware/fileValidation.middleware.ts`](file:///c:/Users/Rakshit%20Garg/Desktop/New%20folder/D-Vault/backend/src/middleware/fileValidation.middleware.ts) directly inspects the binary buffer headers (magic numbers) for JPEG (`FF D8 FF`), PNG (`89 50 4E 47...`), GIF (`GIF87a`/`GIF89a`), WebP (`RIFF...WEBP`), and PDF (`%PDF-`).
+  - **MIME Spoofing Prevention**: Any file disguised with a legitimate extension or fake HTTP header that does not match authentic byte signatures is rejected with HTTP 400.
+  - **File Size Ceiling**: A strict 10MB memory limit prevents denial-of-service memory exhaustion.
+
+---
+
 ## 3. Summary of Security Controls
 
 | Threat Area | Control Mechanism | Status | Primary File |
 | :--- | :--- | :--- | :--- |
 | **JWT Secrets** | Zod `.min(16)` schema validation | Verified | `backend/src/config/env.ts` |
-| **JWT Expiry** | `jwt.verify()` runtime enforcement | Verified | `backend/src/middleware/auth.middleware.ts` |
-| **Replay Attacks** | Single-use UUID nonces with TTL | Verified | `backend/src/services/auth.service.ts` |
+| **JWT Expiry & Alg** | `jwt.verify()` + `algorithms: ['HS256']` | Verified | `backend/src/middleware/auth.middleware.ts` |
+| **Replay Attacks** | Atomic `db().$transaction` single-use UUID nonces with TTL | Verified | `backend/src/services/auth.service.ts` |
 | **Authorization** | Server-side role guard middleware (403) | Verified | `backend/src/middleware/rbac.middleware.ts` |
 | **UI Spoofing** | PermissionGate marked UI-only | Documented | `frontend-web3/components/ui/PermissionGate.tsx` |
-| **Upload Floods** | 10MB memory-limit with MIME filter | Verified | `backend/src/routes/asset.routes.ts` |
+| **Upload Spoofing** | 10MB memory-limit + binary magic bytes verification | Verified | `backend/src/middleware/fileValidation.middleware.ts` |
 | **Brute Force** | Dual-tier IP rate limiting | Verified | `backend/src/routes/auth.routes.ts` |
+| **Contracts CI** | Slither static analysis on `blockchain/**` triggers | Verified | `.github/workflows/contracts-ci.yml` |
 | **Audit Logging** | Immutable on-chain + indexed events | Verified | `backend/src/controllers/audit.controller.ts` |

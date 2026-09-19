@@ -2,7 +2,7 @@ import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 import { Errors } from '../middleware/error.middleware';
-import { AuthenticatedUser, AuthToken } from '../types';
+import { AuthenticatedUser } from '../types';
 import { RoleName } from '@prisma/client';
 
 // Lazy getter to allow jest.mock('../db/prisma') in tests

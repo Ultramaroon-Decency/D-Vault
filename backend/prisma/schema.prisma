@@ -113,6 +113,19 @@ model Nonce {
 }
 
 // =============================================
+// Revoked Tokens (for logout)
+// =============================================
+model RevokedToken {
+  id            String   @id @default(uuid())
+  jti           String   @unique
+  walletAddress String   @map("wallet_address")
+  revokedAt     DateTime @default(now()) @map("revoked_at")
+  expiresAt     DateTime @map("expires_at")
+
+  @@map("revoked_tokens")
+}
+
+// =============================================
 // Transactions (blockchain tx records)
 // =============================================
 model Transaction {

@@ -47,4 +47,18 @@ export const NFT_ABI = [
       { name: 'metadataCID', type: 'string',  indexed: false },
     ],
   },
+  {
+    name: 'pause',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    name: 'unpause',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: [],
+  },
 ] as const

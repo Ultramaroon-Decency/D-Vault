@@ -195,4 +195,48 @@ describe("NFTAsset", function () {
       expect(await nft.supportsInterface("0x780e9d63")).to.equal(true);
     });
   });
+
+  describe("Pause / Circuit-Breaker", function () {
+    it("should allow admin to pause and block minting", async function () {
+      // Admin pauses the contract
+      await expect(nft.connect(admin).pause())
+        .to.emit(nft, "Paused")
+        .withArgs(admin.address);
+
+      // Minting must revert while paused — admin still has onlyMinter rights
+      await expect(nft.connect(admin).mint(recipient.address, METADATA_URI_1))
+        .to.be.revertedWithCustomError(nft, "EnforcedPause");
+    });
+
+    it("should reject pause() from a non-admin account", async function () {
+      // manager has canMint but is NOT an admin
+      await expect(nft.connect(manager).pause())
+        .to.be.revertedWithCustomError(nft, "NotAuthorizedAdmin")
+        .withArgs(manager.address);
+
+      // regularUser is also not an admin
+      await expect(nft.connect(regularUser).pause())
+        .to.be.revertedWithCustomError(nft, "NotAuthorizedAdmin")
+        .withArgs(regularUser.address);
+    });
+
+    it("should allow admin to unpause and resume minting", async function () {
+      // Pause first
+      await nft.connect(admin).pause();
+
+      // Confirm minting is blocked
+      await expect(nft.connect(admin).mint(recipient.address, METADATA_URI_1))
+        .to.be.revertedWithCustomError(nft, "EnforcedPause");
+
+      // Admin unpauses
+      await expect(nft.connect(admin).unpause())
+        .to.emit(nft, "Unpaused")
+        .withArgs(admin.address);
+
+      // Minting resumes successfully
+      await expect(nft.connect(admin).mint(recipient.address, METADATA_URI_1))
+        .to.emit(nft, "NFTMinted")
+        .withArgs(1, recipient.address, METADATA_URI_1);
+    });
+  });
 });

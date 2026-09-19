@@ -3,7 +3,8 @@
 
 const createMockMethod = () => jest.fn();
 
-export const prisma = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const prisma: any = {
   nonce: {
     findFirst: createMockMethod(),
     create: createMockMethod(),
@@ -48,6 +49,13 @@ export const prisma = {
     findUnique: createMockMethod(),
     update: createMockMethod(),
   },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  $transaction: jest.fn(async (cb: any) => {
+    if (typeof cb === 'function') {
+      return cb(prisma);
+    }
+    return Promise.all(cb);
+  }),
   $disconnect: createMockMethod(),
   $connect: createMockMethod(),
 };

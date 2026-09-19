@@ -9,6 +9,7 @@ export interface AuthenticatedUser {
   did: string | null;
   role: RoleName;
   email?: string; // present for Google-authenticated users
+  jti?: string; // JWT ID for revocation
 }
 
 // =============================================

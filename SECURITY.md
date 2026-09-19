@@ -42,3 +42,24 @@ A detailed attack surface analysis and threat model is maintained in the reposit
 - 📖 **Threat Model Documentation**: [security/docs/threat-model.md](security/docs/threat-model.md)
 - 🛡️ **DevOps & QA Overview**: [security/README.md](security/README.md)
 - 📋 **Pre-Demo Dependency Checklist**: [security/checklists/dependency-audit-checklist.md](security/checklists/dependency-audit-checklist.md)
+
+---
+
+## Developer Security Checklist
+
+When building features for D-Vault, please adhere to the following security guidelines:
+
+### Frontend (Web3 UI)
+- **Token Management**: The API supports both a Bearer-header path (for non-browser/test clients) and an `HttpOnly` cookie path (for the browser frontend). The frontend prefers the `HttpOnly` cookie path, mitigating XSS risks for session theft.
+- **Sanitize Input**: Always sanitize user-provided data before rendering it in the DOM to prevent XSS.
+- **Wallet Connection**: Handle disconnection properly; clear any local state/cache related to the user's wallet.
+
+### Backend (Node.js API)
+- **RBAC**: All new protected routes must implement the Role-Based Access Control middleware to prevent Privilege Escalation.
+- **Rate Limiting**: Apply rate-limiting to any route that performs resource-intensive tasks or is susceptible to brute-forcing (e.g., login, file uploads).
+- **Avoid Secrets in Code**: Never hardcode API keys, Wallet Private Keys, or database URIs. Use environment variables (`process.env`). Our Gitleaks CI action will catch `.env` files pushed by mistake.
+
+### Smart Contracts (Solidity)
+- **Checks-Effects-Interactions**: Follow this pattern strictly to avoid Reentrancy attacks.
+- **Access Control**: Use OpenZeppelin's `Ownable` or `AccessControl` for sensitive functions (e.g., minting, pausing).
+- **Static Analysis**: Pay attention to the Slither CI output on your Pull Requests and resolve any warnings before merging.
