@@ -11,8 +11,8 @@ Blockchain-based secure platform for Decentralized Identity (DID), Role-Based Ac
 ## Monorepo Architecture
 
 - **[`backend/`](backend/)**: Node.js & Express REST API built with TypeScript, Prisma ORM, Ethers.js, SIWE (Sign-In with Ethereum), and Google OAuth.
-- **[`frontend-web3/`](frontend-web3/)**: **(Active)** Web3 user interface built with Next.js, featuring SIWE wallet authentication, RBAC dashboards, asset management, audit logs, and DID identity views.
-- **[`frontend/`](frontend/)**: **(Deprecated)** Early scaffold with Google Sign-In only — not used.
+- **[`frontend/`](frontend/)**: **(Active)** Full-featured Web3 + Google Auth dashboard — DID identity, asset registry, role control, audit ledger, mint, all in a single self-contained Next.js app.
+- **[`frontend-web3/`](frontend-web3/)**: **(Deprecated)** Legacy multi-route scaffold — not used.
 - **[`blockchain/`](blockchain/)**: Hardhat workspace with Solidity smart contracts (RBACManager, DIDRegistry, NFTAsset).
 - **[`security/`](security/)**: Centralized hub for DevOps, security audits, secret scanning, QA scripts, and deployment logs.
 - **[`docker-compose.yml`](docker-compose.yml)**: Multi-container local orchestration (PostgreSQL 16, Backend API, Frontend, Hardhat Node).

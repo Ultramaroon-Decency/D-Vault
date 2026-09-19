@@ -54,11 +54,11 @@ services:
       - d-vault-network
 
   # ----------------------------------------------------------------------------
-  # 3. Frontend Service (Next.js + Web3 / SIWE)
+  # 3. Frontend Service (Next.js — Active frontend)
   # ----------------------------------------------------------------------------
   frontend:
     build:
-      context: ./frontend-web3
+      context: ./frontend
       dockerfile: Dockerfile
     container_name: d-vault-frontend
     restart: unless-stopped
@@ -67,7 +67,7 @@ services:
     depends_on:
       - backend
     env_file:
-      - path: ./frontend-web3/.env.local
+      - path: ./frontend/.env.local
         required: false
     environment:
       NODE_ENV: production

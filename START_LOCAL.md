@@ -10,7 +10,7 @@
 | **PostgreSQL 16** | `localhost:5432` | Windows Service (auto-starts on boot) |
 | **Hardhat Node** | `http://127.0.0.1:8545` | Terminal 1 — `npm run node` in `blockchain/` |
 | **Backend API** | `http://localhost:5000` | Terminal 2 — `npm run dev` in `backend/` |
-| **Frontend** | `http://localhost:3000` | Terminal 3 — `npm run dev` in `frontend-web3/` |
+| **Frontend** | `http://localhost:3000` | Terminal 3 — `npm run dev` in `frontend/` |
 
 ---
 
@@ -57,11 +57,9 @@ RBAC_CONTRACT_ADDRESS=0x<new address>
 NFT_ASSET_ADDRESS=0x<new address>
 ```
 
-Open `frontend-web3/.env.local` and update these 3 lines:
+Open `frontend/.env.local` and make sure it has the backend URL:
 ```
-NEXT_PUBLIC_DID_REGISTRY_ADDRESS=0x<new address>
-NEXT_PUBLIC_RBAC_ADDRESS=0x<new address>
-NEXT_PUBLIC_NFT_ADDRESS=0x<new address>
+NEXT_PUBLIC_API_URL=http://localhost:5000
 ```
 
 > **Tip**: The addresses from a fresh Hardhat node are always deterministic in the same order:
@@ -82,7 +80,7 @@ Verify: Open browser → `http://localhost:5000/health` → should return `{"suc
 
 ### Step 6 — Start Frontend (Terminal 4)
 ```bash
-cd "C:\Users\Rakshit Garg\Desktop\New folder\D-Vault\frontend-web3"
+cd "C:\Users\Rakshit Garg\Desktop\New folder\D-Vault\frontend"
 npm run dev
 ```
 Wait for: `✓ Ready in Xs`
@@ -114,7 +112,7 @@ Expected: `success: True, status: ok`
 
 **Frontend shows "cannot connect to backend"?**
 - Make sure backend is running on port 5000
-- Check `frontend-web3/.env.local` has `NEXT_PUBLIC_API_URL=http://localhost:5000`
+- Check `frontend/.env.local` has `NEXT_PUBLIC_API_URL=http://localhost:5000`
 
 **Wallet connect / contract errors?**
 - Hardhat was probably restarted — redo Steps 3 & 4 to redeploy contracts and update addresses
