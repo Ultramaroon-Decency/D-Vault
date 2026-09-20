@@ -658,6 +658,7 @@ function MintPage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadedDocUrl, setUploadedDocUrl] = useState<string | null>(null)
   const [uploadedDocFilename, setUploadedDocFilename] = useState<string | null>(null)
+  const [uploadedDocCID, setUploadedDocCID] = useState<string | null>(null)
   const [metadataCID, setMetadataCID] = useState<string | null>(null)
 
   const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000'
@@ -738,6 +739,7 @@ function MintPage() {
       setMetadataCID(data.cid ?? null)
       setUploadedDocUrl(data.documentUrl ?? null)
       setUploadedDocFilename(data.documentFilename ?? null)
+      setUploadedDocCID(data.documentCID ?? null)
       setStep(3)
     } catch (err: unknown) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
@@ -848,17 +850,20 @@ function MintPage() {
                 {uploadedDocUrl && (
                   <div>
                     <span>Document</span>
-                    <a
-                      href={`${API_BASE}${uploadedDocUrl}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hash hash-link"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                    >
-                      <Paperclip size={12} />
-                      {uploadedDocFilename ?? 'View file'}
-                      <ArrowUpRight size={11} style={{ display: 'inline' }} />
-                    </a>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <a
+                        href={uploadedDocUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hash hash-link"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <Paperclip size={12} />
+                        {uploadedDocFilename ?? 'View file'}
+                        <ArrowUpRight size={11} style={{ display: 'inline' }} />
+                      </a>
+                      {uploadedDocCID && <ProofPill>IPFS · {uploadedDocCID.slice(0, 14)}…</ProofPill>}
+                    </div>
                   </div>
                 )}
               </div>
@@ -876,13 +881,13 @@ function MintPage() {
                 <ProofPill>Ownership verified</ProofPill>
                 {uploadedDocUrl && (
                   <a
-                    href={`${API_BASE}${uploadedDocUrl}`}
+                    href={uploadedDocUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="hash hash-link"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '0.5rem' }}
                   >
-                    <Paperclip size={13} /> View attached document <ArrowUpRight size={11} />
+                    <Paperclip size={13} /> View on IPFS <ArrowUpRight size={11} />
                   </a>
                 )}
               </div>

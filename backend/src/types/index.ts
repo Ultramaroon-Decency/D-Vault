@@ -81,10 +81,12 @@ export interface MetadataUploadResponse {
   ipfsUri: string;
   metadata: NFTMetadata;
   metadataUploadStatus: 'uploaded';
-  /** URL path for locally stored document, e.g. /uploads/uuid-name.pdf */
+  /** Pinata gateway URL for the uploaded document, e.g. https://gateway.pinata.cloud/ipfs/<cid> */
   documentUrl?: string;
   /** Original filename the user uploaded */
   documentFilename?: string;
+  /** Raw IPFS CID of the document */
+  documentCID?: string;
 }
 
 // =============================================
