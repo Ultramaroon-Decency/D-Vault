@@ -39,6 +39,8 @@ model User {
   email         String?    @unique                         // from Google OAuth
   googleId      String?    @unique @map("google_id")       // Google sub claim
   authProvider  String     @default("wallet") @map("auth_provider") // 'wallet' | 'google' | 'both'
+  // SECURITY: tokenVersion enables JWT revocation. Increment on logout to invalidate all existing tokens. (VULN-03)
+  tokenVersion  Int        @default(0) @map("token_version")
   createdAt     DateTime   @default(now()) @map("created_at")
   updatedAt     DateTime   @updatedAt @map("updated_at")
 

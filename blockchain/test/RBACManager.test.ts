@@ -160,6 +160,12 @@ describe("RBACManager", function () {
       await expect(rbac.connect(user1).revokeRole(user2.address))
         .to.be.revertedWithCustomError(rbac, "NotAdmin");
     });
+
+    it("should revert if admin attempts self-revocation (VULN-08 protection)", async function () {
+      await expect(rbac.connect(admin).revokeRole(admin.address))
+        .to.be.revertedWithCustomError(rbac, "NotAdmin")
+        .withArgs(admin.address);
+    });
   });
 
   describe("canMint", function () {

@@ -14,6 +14,7 @@ const config: Config = {
   setupFiles: ['<rootDir>/tests/setup.ts'],
   // Disable actual DB/blockchain in tests
   testTimeout: 15000,
+  modulePathIgnorePatterns: ['<rootDir>/dist/'],
 };
 
 export default config;

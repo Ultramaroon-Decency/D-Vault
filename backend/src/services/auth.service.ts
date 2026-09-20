@@ -18,7 +18,7 @@ const NONCE_TTL_MS = env.NONCE_TTL_SECONDS * 1000;
 // =============================================
 const buildSignMessage = (address: string, nonce: string): string => {
   return [
-    'SIH Platform wants you to sign in with your Ethereum account:',
+    'D-Vault Platform wants you to sign in with your Ethereum account:',
     address,
     '',
     'Sign this message to authenticate. This request will not trigger a blockchain transaction or cost any gas fees.',
@@ -26,6 +26,25 @@ const buildSignMessage = (address: string, nonce: string): string => {
     `Nonce: ${nonce}`,
     `Chain ID: ${env.CHAIN_ID}`,
   ].join('\n');
+};
+
+// =============================================
+// SECURITY: Clean up expired/used nonces (VULN-23)
+// Prevents DB accumulation and reduces attack surface
+// =============================================
+const cleanupExpiredNonces = async (): Promise<void> => {
+  try {
+    await db().nonce.deleteMany({
+      where: {
+        OR: [
+          { used: true },
+          { expiresAt: { lt: new Date() } },
+        ],
+      },
+    });
+  } catch {
+    // Non-critical — log only, don't fail request
+  }
 };
 
 // =============================================
@@ -45,6 +64,9 @@ export const issueNonce = async (walletAddress: string): Promise<NonceResponse> 
   await db().nonce.create({
     data: { walletAddress: normalized, nonce, expiresAt },
   });
+
+  // SECURITY: Cleanup expired nonces asynchronously (VULN-23)
+  cleanupExpiredNonces().catch(() => {});
 
   const message = buildSignMessage(walletAddress, nonce);
 
@@ -102,10 +124,14 @@ export const verifySignatureAndLogin = async (
     data: { used: true },
   });
 
-  // 5. Upsert user record
+  // 5. Upsert user record, SECURITY: increment tokenVersion on each login (VULN-03)
+  // This implicitly revokes all previously issued JWTs for this user
   const user = await db().user.upsert({
     where: { walletAddress: normalized },
-    update: { updatedAt: new Date() },
+    update: {
+      updatedAt: new Date(),
+      tokenVersion: { increment: 1 },
+    },
     create: { walletAddress: normalized },
     include: { userRoles: { include: { role: true } } },
   });
@@ -116,12 +142,13 @@ export const verifySignatureAndLogin = async (
   const resolvedRole: RoleName =
     ROLE_PRIORITY.find((r) => userRoleNames.includes(r)) ?? 'USER';
 
-  // 7. Issue JWT
+  // 7. Issue JWT — SECURITY: includes tokenVersion for revocation checking (VULN-03)
   const payload: AuthenticatedUser = {
     userId: user.id,
-    walletAddress: user.walletAddress,
+    walletAddress: user.walletAddress ?? normalized,
     did: user.did,
     role: resolvedRole,
+    tokenVersion: user.tokenVersion,
   };
 
   const token = jwt.sign(payload, env.JWT_SECRET, {
@@ -129,6 +156,17 @@ export const verifySignatureAndLogin = async (
   });
 
   return { token, expiresIn: env.JWT_EXPIRES_IN };
+};
+
+// =============================================
+// Logout — invalidate all existing JWTs (VULN-03)
+// Incrementing tokenVersion makes all existing tokens stale
+// =============================================
+export const logoutUser = async (userId: string): Promise<void> => {
+  await db().user.update({
+    where: { id: userId },
+    data: { tokenVersion: { increment: 1 } },
+  });
 };
 
 // =============================================
@@ -149,8 +187,9 @@ export const getMe = async (walletAddress: string): Promise<AuthenticatedUser & 
 
   return {
     userId: user.id,
-    walletAddress: user.walletAddress,
+    walletAddress: user.walletAddress ?? walletAddress.toLowerCase(),
     did: user.did,
     role: resolvedRole,
+    tokenVersion: user.tokenVersion,
   };
 };

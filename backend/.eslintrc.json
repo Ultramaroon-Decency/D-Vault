@@ -1,6 +1,6 @@
 {
+  "root": true,
   "extends": [
-    "../.eslintrc.base.json",
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended"
   ],
@@ -12,6 +12,9 @@
   "plugins": ["@typescript-eslint"],
   "rules": {
     "no-console": "off",
+    "@typescript-eslint/no-unused-expressions": "off",
+    "@typescript-eslint/no-require-imports": "off",
+    "@typescript-eslint/no-var-requires": "off",
     "@typescript-eslint/no-unused-vars": [
       "warn",
       {

@@ -19,7 +19,10 @@ contract DIDRegistry {
         string  did;             // e.g. "did:ethr:sepolia:0xabc..."
         address controller;      // who controls this identity (defaults to owner)
         uint256 createdAtBlock;  // block number when registered
-        bool    verified;        // can be set by admin/governance later
+        // SECURITY FIX (VULN-07): verified is now false by default.
+        // Must be explicitly set by admin/governance via setVerified().
+        // Previously auto-set to true which gave false identity assurance.
+        bool    verified;        // set by admin/governance after real verification
         bool    exists;          // internal flag — true once registered
     }
 
@@ -29,17 +32,30 @@ contract DIDRegistry {
     /// @notice Total number of registered identities
     uint256 public totalIdentities;
 
+    /// @notice Tracks the contract admin (set at deployment)
+    address public admin;
+
     // ─── Events ───────────────────────────────────────────────────────────────
 
     /// @notice Emitted when a new DID is registered.
     ///         Backend event listener subscribes to this.
     event DIDCreated(address indexed owner, string did);
 
+    /// @notice Emitted when admin sets or updates the verified status of a DID.
+    event DIDVerified(address indexed owner, bool verified);
+
     // ─── Errors ───────────────────────────────────────────────────────────────
 
     error AlreadyRegistered(address owner);
     error EmptyDID();
     error NotRegistered(address owner);
+    error NotAdmin();
+
+    // ─── Constructor ─────────────────────────────────────────────────────────
+
+    constructor() {
+        admin = msg.sender;
+    }
 
     // ─── Public Functions ─────────────────────────────────────────────────────
 
@@ -59,13 +75,26 @@ contract DIDRegistry {
             did:            did,
             controller:     msg.sender,
             createdAtBlock: block.number,
-            verified:       true,       // self-registered = auto-verified
+            verified:       false,      // SECURITY FIX (VULN-07): must be verified by admin
             exists:         true
         });
 
         totalIdentities++;
 
         emit DIDCreated(msg.sender, did);
+    }
+
+    /**
+     * @notice Admin sets the verified status of a registered identity.
+     *         Only the contract admin can verify or un-verify identities.
+     * @param account The wallet address whose identity to verify.
+     * @param status  True to verify, false to revoke verification.
+     */
+    function setVerified(address account, bool status) external {
+        if (msg.sender != admin) revert NotAdmin();
+        if (!_identities[account].exists) revert NotRegistered(account);
+        _identities[account].verified = status;
+        emit DIDVerified(account, status);
     }
 
     /**

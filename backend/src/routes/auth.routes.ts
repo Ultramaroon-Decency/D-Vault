@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { getNonce, verify, getMe } from '../controllers/auth.controller';
+import { getNonce, verify, getMe, logout } from '../controllers/auth.controller';
 import { verifyGoogleToken } from '../controllers/googleAuth.controller';
 import { authenticate } from '../middleware/auth.middleware';
 import { env } from '../config/env';
@@ -35,5 +35,9 @@ router.post('/google/verify', authLimiter, ...verifyGoogleToken);
 // GET /api/auth/me       — Authenticated
 router.get('/me', authenticate, getMe);
 
-export default router;
+// ── Logout ───────────────────────────────────────────────────────────────────
+// POST /api/auth/logout  — Authenticated
+// SECURITY: Increments tokenVersion to revoke all existing JWTs for this user (VULN-03)
+router.post('/logout', authenticate, logout);
 
+export default router;
