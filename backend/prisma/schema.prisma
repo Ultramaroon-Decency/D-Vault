@@ -79,6 +79,8 @@ model Asset {
   assetType       String?  @map("asset_type")
   name            String?
   description     String?
+  documentUrl     String?  @map("document_url")      // local /uploads/<uuid>-filename
+  documentFilename String? @map("document_filename")  // original filename for display
   status          AssetStatus @default(CONFIRMED)
   mintedAt        DateTime? @map("minted_at")
   createdAt       DateTime  @default(now()) @map("created_at")

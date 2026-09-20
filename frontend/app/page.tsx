@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowUpRight, BadgeCheck, BarChart3, Bell, BookOpen, Check, ChevronDown, CircleHelp, Copy, Fingerprint, GitBranch, Globe2, KeyRound, LayoutDashboard, Loader2, Menu, Network, Plus, Search, Settings2, ShieldCheck, Sparkles, UserPlus, UserRound, Users, Wallet, X, Zap } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Activity, ArrowUpRight, BadgeCheck, BarChart3, Bell, BookOpen, Check, ChevronDown, CircleHelp, Copy, File, FileText, Fingerprint, GitBranch, Globe2, KeyRound, LayoutDashboard, Loader2, Menu, Network, Paperclip, Plus, Search, Settings2, ShieldCheck, Sparkles, Upload, UserPlus, UserRound, Users, Wallet, X, Zap } from 'lucide-react'
 import { assets, auditEntries, currentIdentity, roleMeta, stats, type Asset, type Role, truncate } from '@/lib/mock-data'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -619,9 +619,133 @@ function AuditPage() {
   )
 }
 
+// ─── File icon helper ─────────────────────────────────────────────────────────
+
+function FileIcon({ mimetype }: { mimetype: string }) {
+  if (mimetype === 'application/pdf') return <FileText size={20} className="file-icon-pdf" />
+  if (mimetype.startsWith('image/')) return <FileText size={20} className="file-icon-img" />
+  return <File size={20} className="file-icon-doc" />
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+// ─── MintPage ─────────────────────────────────────────────────────────────────
+
 function MintPage() {
   const [step, setStep] = useState(1)
   const steps = ['Recipient', 'Metadata', 'Review', 'Sign']
+
+  // Step 1 state
+  const [recipientDID, setRecipientDID] = useState('did:ethr:0x71C7...9a42')
+
+  // Step 2 state
+  const [assetName, setAssetName] = useState('')
+  const [collection, setCollection] = useState('')
+  const [description, setDescription] = useState('')
+  const [assetType, setAssetType] = useState('Document')
+
+  // File state
+  const [pickedFile, setPickedFile] = useState<File | null>(null)
+  const [isDragOver, setIsDragOver] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Upload / API state
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadedDocUrl, setUploadedDocUrl] = useState<string | null>(null)
+  const [uploadedDocFilename, setUploadedDocFilename] = useState<string | null>(null)
+  const [metadataCID, setMetadataCID] = useState<string | null>(null)
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000'
+
+  // ── File picking ────────────────────────────────────────────────────────────
+
+  const ALLOWED_EXTS = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.csv']
+
+  function acceptFile(f: File) {
+    const ext = '.' + f.name.split('.').pop()!.toLowerCase()
+    if (!ALLOWED_EXTS.includes(ext)) {
+      setUploadError(`File type "${ext}" is not supported. Allowed: ${ALLOWED_EXTS.join(', ')}`)
+      return
+    }
+    if (f.size > 50 * 1024 * 1024) {
+      setUploadError('File is too large. Maximum size is 50 MB.')
+      return
+    }
+    setUploadError(null)
+    setPickedFile(f)
+    setUploadedDocUrl(null)
+    setUploadedDocFilename(null)
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    if (f) acceptFile(f)
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    setIsDragOver(false)
+    const f = e.dataTransfer.files?.[0]
+    if (f) acceptFile(f)
+  }
+
+  function removeFile() {
+    setPickedFile(null)
+    setUploadedDocUrl(null)
+    setUploadedDocFilename(null)
+    setUploadError(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  // ── Continue from step 2 → 3 (upload file + metadata) ──────────────────────
+
+  async function handleMetadataContinue() {
+    if (!assetName.trim() || !description.trim()) {
+      setUploadError('Asset name and description are required.')
+      return
+    }
+    setUploadError(null)
+    setUploading(true)
+
+    try {
+      const token = localStorage.getItem('auth_token') ?? ''
+
+      const formData = new FormData()
+      formData.append('name', assetName.trim())
+      formData.append('description', description.trim())
+      formData.append('assetType', assetType)
+      formData.append('ownerDID', recipientDID)
+      if (pickedFile) formData.append('file', pickedFile)
+
+      const res = await fetch(`${API_BASE}/api/assets/metadata`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      })
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ error: { message: 'Upload failed' } }))
+        throw new Error(errBody?.error?.message ?? `Server error ${res.status}`)
+      }
+
+      const body = await res.json()
+      const data = body.data
+      setMetadataCID(data.cid ?? null)
+      setUploadedDocUrl(data.documentUrl ?? null)
+      setUploadedDocFilename(data.documentFilename ?? null)
+      setStep(3)
+    } catch (err: unknown) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   return (
     <div className="page-content">
       <SectionHeading eyebrow="Asset operations / New issuance" title="Mint an asset" action={<span className="gas-note"><Zap size={14} /> Est. gas 0.002 ETH</span>} />
@@ -629,25 +753,197 @@ function MintPage() {
         <div className="mint-main">
           <div className="stepper">{steps.map((item, index) => <div className={`step ${step > index + 1 ? 'done' : ''} ${step === index + 1 ? 'current' : ''}`} key={item}><span>{step > index + 1 ? <Check size={13} /> : index + 1}</span><label>{item}</label></div>)}</div>
           <div className="form-card">
-            {step === 1 && <><p className="eyebrow">Step 01 / Recipient</p><h2>Who should own this asset?</h2><p className="muted-copy">Assets are linked to a DID. The recipient will receive a verifiable ownership credential.</p><label className="field-label">Recipient DID</label><div className="input-wrap"><Fingerprint size={16} /><input defaultValue="did:ethr:0x71C7...9a42" /></div><div className="recipient-check"><BadgeCheck size={17} /><div><strong>Identity resolved</strong><span>Operator / 0x71C7 · Created 08 Mar 2026</span></div></div></>}
-            {step === 2 && <><p className="eyebrow">Step 02 / Metadata</p><h2>Describe the asset</h2><p className="muted-copy">Metadata is pinned to IPFS and its content hash committed on-chain with the mint.</p><label className="field-label">Asset name</label><div className="input-wrap"><input placeholder="e.g. Field Credential / Level 04" /></div><label className="field-label">Collection</label><div className="input-wrap"><input placeholder="Select or create collection" /></div><label className="field-label">Description</label><div className="input-wrap textarea"><textarea placeholder="What does this asset represent?" /></div></>}
-            {step === 3 && <><p className="eyebrow">Step 03 / Review</p><h2>Check the issuance</h2><div className="review-list"><div><span>Recipient</span><Hash>{currentIdentity.did}</Hash></div><div><span>Standard</span><strong>ERC-721</strong></div><div><span>Network fee</span><strong>~ 0.002 ETH <small>($6.42)</small></strong></div><div><span>Metadata</span><ProofPill>Content hash ready</ProofPill></div></div><div className="signature-note"><KeyRound size={18} /><div><strong>Next: sign a transaction</strong><span>This action will cost gas and permanently create the asset. Your wallet will ask for confirmation.</span></div></div></>}
-            {step === 4 && <div className="mint-success"><div className="success-orbit"><BadgeCheck size={34} /></div><p className="eyebrow accent-text">Transaction confirmed</p><h2>Asset is now yours.</h2><p className="muted-copy">Field Credential / Level 04 has been minted and linked to your DID.</p><button className="hash hash-link" onClick={() => openTxInExplorer('0xac11f8e0')}>tx: 0xac11...f8e0 <ArrowUpRight size={11} style={{ display: 'inline' }} /></button><ProofPill>Ownership verified</ProofPill></div>}
+
+            {/* ── Step 1: Recipient ── */}
+            {step === 1 && <>
+              <p className="eyebrow">Step 01 / Recipient</p>
+              <h2>Who should own this asset?</h2>
+              <p className="muted-copy">Assets are linked to a DID. The recipient will receive a verifiable ownership credential.</p>
+              <label className="field-label">Recipient DID</label>
+              <div className="input-wrap"><Fingerprint size={16} /><input value={recipientDID} onChange={e => setRecipientDID(e.target.value)} placeholder="did:ethr:0x..." /></div>
+              <div className="recipient-check"><BadgeCheck size={17} /><div><strong>Identity resolved</strong><span>Operator / 0x71C7 · Created 08 Mar 2026</span></div></div>
+            </>}
+
+            {/* ── Step 2: Metadata + File Upload ── */}
+            {step === 2 && <>
+              <p className="eyebrow">Step 02 / Metadata</p>
+              <h2>Describe the asset</h2>
+              <p className="muted-copy">Metadata is pinned to IPFS and its content hash committed on-chain with the mint.</p>
+
+              <label className="field-label">Asset name</label>
+              <div className="input-wrap"><input placeholder="e.g. Field Credential / Level 04" value={assetName} onChange={e => setAssetName(e.target.value)} /></div>
+
+              <label className="field-label">Asset type</label>
+              <div className="input-wrap">
+                <select value={assetType} onChange={e => setAssetType(e.target.value)} style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 'inherit', width: '100%', cursor: 'pointer' }}>
+                  <option value="Document">Document</option>
+                  <option value="Certificate">Certificate</option>
+                  <option value="Image">Image</option>
+                  <option value="Credential">Credential</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <label className="field-label">Description</label>
+              <div className="input-wrap textarea"><textarea placeholder="What does this asset represent?" value={description} onChange={e => setDescription(e.target.value)} /></div>
+
+              {/* ── File Attachment Zone ── */}
+              <label className="field-label" style={{ marginTop: '1.2rem' }}>
+                <Paperclip size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+                Attach document <span className="muted-label">(optional · max 50 MB)</span>
+              </label>
+
+              {!pickedFile ? (
+                <div
+                  className={`file-drop-zone${isDragOver ? ' drag-over' : ''}`}
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={e => { e.preventDefault(); setIsDragOver(true) }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={handleDrop}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Upload document"
+                  onKeyDown={e => e.key === 'Enter' && fileInputRef.current?.click()}
+                >
+                  <Upload size={26} className="drop-icon" />
+                  <p><strong>Click to browse</strong> or drag &amp; drop a file here</p>
+                  <span className="muted-label">PDF · DOCX · XLSX · TXT · CSV · Images</span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.jpg,.jpeg,.png,.gif,.webp"
+                    style={{ display: 'none' }}
+                    onChange={handleFileInputChange}
+                  />
+                </div>
+              ) : (
+                <div className="file-selected">
+                  <FileIcon mimetype={pickedFile.type} />
+                  <div className="file-selected-info">
+                    <strong>{pickedFile.name}</strong>
+                    <span>{formatBytes(pickedFile.size)} · {pickedFile.type || 'unknown type'}</span>
+                  </div>
+                  <button className="icon-button file-remove-btn" onClick={removeFile} aria-label="Remove file"><X size={15} /></button>
+                </div>
+              )}
+
+              {uploadError && (
+                <div className="upload-error">
+                  <X size={14} /> {uploadError}
+                </div>
+              )}
+            </>}
+
+            {/* ── Step 3: Review ── */}
+            {step === 3 && <>
+              <p className="eyebrow">Step 03 / Review</p>
+              <h2>Check the issuance</h2>
+              <div className="review-list">
+                <div><span>Recipient</span><Hash>{recipientDID}</Hash></div>
+                <div><span>Asset name</span><strong>{assetName}</strong></div>
+                <div><span>Asset type</span><strong>{assetType}</strong></div>
+                <div><span>Standard</span><strong>ERC-721</strong></div>
+                <div><span>Network fee</span><strong>~ 0.002 ETH <small>($6.42)</small></strong></div>
+                <div><span>Metadata</span><ProofPill>{metadataCID ? `CID: ${metadataCID.slice(0, 12)}…` : 'Content hash ready'}</ProofPill></div>
+                {uploadedDocUrl && (
+                  <div>
+                    <span>Document</span>
+                    <a
+                      href={`${API_BASE}${uploadedDocUrl}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hash hash-link"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Paperclip size={12} />
+                      {uploadedDocFilename ?? 'View file'}
+                      <ArrowUpRight size={11} style={{ display: 'inline' }} />
+                    </a>
+                  </div>
+                )}
+              </div>
+              <div className="signature-note"><KeyRound size={18} /><div><strong>Next: sign a transaction</strong><span>This action will cost gas and permanently create the asset. Your wallet will ask for confirmation.</span></div></div>
+            </>}
+
+            {/* ── Step 4: Success ── */}
+            {step === 4 && (
+              <div className="mint-success">
+                <div className="success-orbit"><BadgeCheck size={34} /></div>
+                <p className="eyebrow accent-text">Transaction confirmed</p>
+                <h2>Asset is now yours.</h2>
+                <p className="muted-copy">{assetName || 'Field Credential / Level 04'} has been minted and linked to your DID.</p>
+                <button className="hash hash-link" onClick={() => openTxInExplorer('0xac11f8e0')}>tx: 0xac11...f8e0 <ArrowUpRight size={11} style={{ display: 'inline' }} /></button>
+                <ProofPill>Ownership verified</ProofPill>
+                {uploadedDocUrl && (
+                  <a
+                    href={`${API_BASE}${uploadedDocUrl}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hash hash-link"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '0.5rem' }}
+                  >
+                    <Paperclip size={13} /> View attached document <ArrowUpRight size={11} />
+                  </a>
+                )}
+              </div>
+            )}
+
+            {/* ── Navigation buttons ── */}
             <div className="form-actions">
-              {step > 1 && step < 4 && <button className="button button-outline" onClick={() => setStep(step - 1)}>Back</button>}
-              {step < 4 && <button className="button button-primary" onClick={() => setStep(step + 1)}>{step === 3 ? 'Sign & mint' : 'Continue'} <ArrowUpRight size={15} /></button>}
-              {step === 4 && <button className="button button-primary" onClick={() => setStep(1)}>Mint another asset <Plus size={15} /></button>}
+              {step > 1 && step < 4 && (
+                <button className="button button-outline" onClick={() => setStep(step - 1)} disabled={uploading}>Back</button>
+              )}
+              {step === 1 && (
+                <button className="button button-primary" onClick={() => setStep(2)}>Continue <ArrowUpRight size={15} /></button>
+              )}
+              {step === 2 && (
+                <button
+                  className="button button-primary"
+                  onClick={handleMetadataContinue}
+                  disabled={uploading || !assetName.trim() || !description.trim()}
+                >
+                  {uploading
+                    ? <><Loader2 size={15} className="spin" /> Uploading…</>
+                    : <>Continue <ArrowUpRight size={15} /></>
+                  }
+                </button>
+              )}
+              {step === 3 && (
+                <button className="button button-primary" onClick={() => setStep(4)}>Sign &amp; mint <ArrowUpRight size={15} /></button>
+              )}
+              {step === 4 && (
+                <button className="button button-primary" onClick={() => { setStep(1); setAssetName(''); setCollection(''); setDescription(''); setPickedFile(null); setUploadedDocUrl(null); setMetadataCID(null) }}>Mint another asset <Plus size={15} /></button>
+              )}
             </div>
           </div>
         </div>
         <div className="mint-aside">
           <div className="aside-art"><Fingerprint size={42} /><span>DID → NFT</span><small>permanent ownership link</small></div>
-          <div className="gas-card"><div><span className="muted-label">Transaction type</span><strong>On-chain write</strong></div><div><span className="muted-label">Estimated gas</span><strong>0.002 ETH</strong></div><div><span className="muted-label">Confirmation</span><strong>~ 15 seconds</strong></div></div>
+          <div className="gas-card">
+            <div><span className="muted-label">Transaction type</span><strong>On-chain write</strong></div>
+            <div><span className="muted-label">Estimated gas</span><strong>0.002 ETH</strong></div>
+            <div><span className="muted-label">Confirmation</span><strong>~ 15 seconds</strong></div>
+            <div><span className="muted-label">Contract</span><strong>NFTAsset</strong></div>
+            <div><span className="muted-label">Network</span><strong>Ethereum Sepolia</strong></div>
+          </div>
+          {pickedFile && (
+            <div className="gas-card" style={{ marginTop: '0.75rem' }}>
+              <div style={{ marginBottom: '0.4rem' }}><span className="muted-label">Attached file</span></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FileIcon mimetype={pickedFile.type} />
+                <div style={{ overflow: 'hidden' }}>
+                  <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem' }}>{pickedFile.name}</strong>
+                  <span className="muted-label">{formatBytes(pickedFile.size)}</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   )
 }
+
 
 function RolesPage() {
   const [assigned, setAssigned] = useState<string | null>(null)

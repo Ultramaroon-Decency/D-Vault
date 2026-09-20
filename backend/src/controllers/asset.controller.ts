@@ -13,14 +13,20 @@ export const prepareMetadata = async (req: Request, res: Response, next: NextFun
 
     const { name, description, assetType, ownerDID } = req.body;
 
-    // Handle optional file upload (multer populates req.file)
+    // Multer disk storage writes the file to uploads/<uuid>-filename automatically.
+    // req.file.filename is the safe filename chosen by diskStorage.filename().
+    // We pass the already-on-disk file info directly to the service.
     const file = req.file;
 
     const result = await assetService.prepareMetadata(
       { name, description, assetType, ownerDID },
-      file?.buffer,
-      file?.originalname,
-      file?.mimetype,
+      file
+        ? {
+            filename: file.filename,         // uuid-safe-name.pdf
+            originalname: file.originalname, // original user filename
+            mimetype: file.mimetype,
+          }
+        : undefined,
     );
 
     res.status(200).json({ success: true, data: result });

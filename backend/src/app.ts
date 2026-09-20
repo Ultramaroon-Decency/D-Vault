@@ -1,10 +1,12 @@
 import express, { Request, Response } from 'express';
+import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { logger } from './utils/logger';
+import { UPLOADS_DIR } from './services/storage.service';
 
 // Routes
 import authRoutes from './routes/auth.routes';
@@ -44,6 +46,12 @@ app.use(globalLimiter);
 // =============================================
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// =============================================
+// Static: serve uploaded documents
+// GET /uploads/<filename>  →  backend/uploads/<filename>
+// =============================================
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // =============================================
 // Request Logger

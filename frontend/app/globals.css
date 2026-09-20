@@ -135,3 +135,82 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* Footnote */
 .auth-footnote { color: var(--faint); font-size: 10px; display: flex; align-items: center; gap: 5px; justify-content: center; margin: 14px 0 0; }
 .auth-footnote svg { color: var(--mint); }
+
+/* ── File upload / drop zone ───────────────────────────────────────────────── */
+.file-drop-zone {
+  border: 2px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 28px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s ease, background .2s ease;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  user-select: none;
+  margin-top: 6px;
+}
+.file-drop-zone:hover,
+.file-drop-zone:focus-visible {
+  border-color: var(--mint);
+  background: #9df5c106;
+  outline: none;
+}
+.file-drop-zone.drag-over {
+  border-color: var(--mint);
+  background: #9df5c10d;
+  box-shadow: 0 0 0 4px #9df5c118;
+}
+.file-drop-zone p { margin: 0; color: var(--foreground); font-size: 13px; }
+.file-drop-zone strong { color: var(--mint); }
+.drop-icon { color: var(--mint); margin-bottom: 4px; }
+
+/* Selected file row */
+.file-selected {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  margin-top: 6px;
+  animation: slideUp .2s ease;
+}
+.file-selected-info { flex: 1; overflow: hidden; }
+.file-selected-info strong { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-selected-info span { font-size: 10px; color: var(--muted); }
+.file-remove-btn { flex-shrink: 0; }
+.file-remove-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+/* File type icon colours */
+.file-icon-pdf { color: #ed766b; }
+.file-icon-img { color: #91c6e9; }
+.file-icon-doc { color: #eeb768; }
+
+/* Upload error */
+.upload-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: #ed766b10;
+  border: 1px solid #ed766b44;
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 10px;
+  animation: slideUp .2s ease;
+}
+
+/* Spin animation for loader */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin .8s linear infinite; display: inline-block; }
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

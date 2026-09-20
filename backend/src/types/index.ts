@@ -81,6 +81,10 @@ export interface MetadataUploadResponse {
   ipfsUri: string;
   metadata: NFTMetadata;
   metadataUploadStatus: 'uploaded';
+  /** URL path for locally stored document, e.g. /uploads/uuid-name.pdf */
+  documentUrl?: string;
+  /** Original filename the user uploaded */
+  documentFilename?: string;
 }
 
 // =============================================

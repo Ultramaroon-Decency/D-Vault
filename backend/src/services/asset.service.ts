@@ -6,25 +6,45 @@ import { logger } from '../utils/logger';
 import { Asset, AssetStatus } from '@prisma/client';
 
 // =============================================
+// Uploaded file info passed from controller
+// =============================================
+export interface UploadedFileInfo {
+  filename: string;      // UUID-safe filename already on disk (e.g. uuid-name.pdf)
+  originalname: string;  // Original filename from the user
+  mimetype: string;
+}
+
+// =============================================
 // Upload NFT metadata to IPFS
 // Returns CID for the frontend to use when minting
 // Does NOT call the mint function — that's the frontend wallet's job
 // =============================================
 export const prepareMetadata = async (
   metadata: NFTMetadata,
-  imageBuffer?: Buffer,
-  imageFilename?: string,
-  imageMimetype?: string,
+  fileInfo?: UploadedFileInfo,
 ): Promise<MetadataUploadResponse> => {
   let imageCID: string | undefined;
+  let documentUrl: string | undefined;
+  let documentFilename: string | undefined;
 
-  // 1. Upload image file if provided
-  if (imageBuffer && imageFilename && imageMimetype) {
-    logger.info('[Asset] Uploading image to IPFS', { filename: imageFilename });
-    imageCID = await ipfsService.uploadFile(imageBuffer, imageFilename, imageMimetype);
+  if (fileInfo) {
+    if (fileInfo.mimetype.startsWith('image/')) {
+      // Images: upload to IPFS (existing behaviour) — read from disk first
+      logger.info('[Asset] Uploading image to IPFS', { filename: fileInfo.filename });
+      const fs = await import('fs');
+      const path = await import('path');
+      const { UPLOADS_DIR } = await import('./storage.service');
+      const imageBuffer = await fs.promises.readFile(path.join(UPLOADS_DIR, fileInfo.filename));
+      imageCID = await ipfsService.uploadFile(imageBuffer, fileInfo.originalname, fileInfo.mimetype);
+    } else {
+      // Non-image documents: already saved to disk by multer, just record the URL
+      logger.info('[Asset] Document saved to local storage', { filename: fileInfo.filename });
+      documentUrl = `/uploads/${fileInfo.filename}`;
+      documentFilename = fileInfo.originalname;
+    }
   }
 
-  // 2. Build ERC-721 compatible metadata JSON
+  // Build ERC-721 compatible metadata JSON
   const nftMetadata: NFTMetadata = {
     name: metadata.name,
     description: metadata.description,
@@ -34,11 +54,12 @@ export const prepareMetadata = async (
     attributes: [
       { trait_type: 'Asset Type', value: metadata.assetType },
       { trait_type: 'Owner DID', value: metadata.ownerDID ?? '' },
+      ...(documentUrl ? [{ trait_type: 'Document URL', value: documentUrl }] : []),
     ],
     ...metadata.attributes && { attributes: metadata.attributes },
   };
 
-  // 3. Upload metadata JSON to IPFS
+  // Upload metadata JSON to IPFS
   logger.info('[Asset] Uploading metadata to IPFS', { name: metadata.name });
   const cid = await ipfsService.uploadMetadata(nftMetadata);
   const ipfsUri = ipfsService.toIpfsUri(cid);
@@ -50,6 +71,8 @@ export const prepareMetadata = async (
     ipfsUri,
     metadata: nftMetadata,
     metadataUploadStatus: 'uploaded',
+    documentUrl,
+    documentFilename,
   };
 };
 
