@@ -40,16 +40,31 @@ jobs:
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
+      - name: Verify Vercel Credentials
+        id: check-credentials
+        run: |
+          if [ -z "${{ secrets.VERCEL_TOKEN }}" ]; then
+            echo "has_token=false" >> $GITHUB_OUTPUT
+            echo "::warning::VERCEL_TOKEN secret is not configured or unavailable in this context (e.g. PR from a fork). Skipping Vercel preview deployment."
+            echo "### ⚠️ Vercel Preview Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "The \`VERCEL_TOKEN\` secret is not set in repository secrets or is unavailable due to fork PR security restrictions. Configure \`VERCEL_TOKEN\`, \`VERCEL_ORG_ID\`, and \`VERCEL_PROJECT_ID\` in repository secrets to enable preview deployments." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "has_token=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Install Vercel CLI
+        if: steps.check-credentials.outputs.has_token == 'true'
         run: npm install --global vercel@latest
 
       - name: Pull Vercel Environment Information
+        if: steps.check-credentials.outputs.has_token == 'true'
         run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Build Project Artifacts
+        if: steps.check-credentials.outputs.has_token == 'true'
         run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -57,6 +72,7 @@ jobs:
           NEXT_PUBLIC_USE_MOCK_DATA: 'true'
 
       - name: Deploy Project Artifacts to Vercel
+        if: steps.check-credentials.outputs.has_token == 'true'
         id: deploy
         run: |
           DEPLOYMENT_URL=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
@@ -69,7 +85,7 @@ jobs:
 
       - name: Comment Preview URL on PR
         uses: actions/github-script@v7
-        if: steps.deploy.outputs.preview_url != ''
+        if: steps.check-credentials.outputs.has_token == 'true' && steps.deploy.outputs.preview_url != ''
         with:
           script: |
             const url = "${{ steps.deploy.outputs.preview_url }}";

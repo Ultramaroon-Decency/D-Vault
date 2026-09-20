@@ -14,8 +14,8 @@ describe("DIDRegistry", function () {
 
   beforeEach(async function () {
     [owner, user1, user2] = await ethers.getSigners();
-    const DIDRegistry = await ethers.getContractFactory("DIDRegistry");
-    registry = await DIDRegistry.deploy();
+    const didRegistryFactory = await ethers.getContractFactory("DIDRegistry");
+    registry = await didRegistryFactory.deploy() as unknown as DIDRegistry;
     await registry.waitForDeployment();
   });
 

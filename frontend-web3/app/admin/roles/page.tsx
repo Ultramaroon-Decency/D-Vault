@@ -11,7 +11,6 @@ import { useDemoAuth } from "@/lib/web3/demoAuth";
 import { useAllIdentities } from "@/hooks/web3/useAuditEvents";
 import { RoleBadge } from "@/components/ui/RoleBadge";
 import { CopyableAddress } from "@/components/ui/CopyableAddress";
-import { VerificationBadge } from "@/components/ui/VerificationBadge";
 
 export default function AdminRolesPage() {
   const router = useRouter();
@@ -65,18 +64,14 @@ export default function AdminRolesPage() {
             <div className="space-y-2">
               {identities.map((id) => (
                 <div
-                  key={id.address}
+                  key={id.walletAddress}
                   className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900/60 p-3"
                 >
                   <div className="min-w-0">
-                    <CopyableAddress address={id.address} />
+                    <CopyableAddress address={id.walletAddress} />
                     <p className="mt-0.5 truncate font-mono text-[10px] text-slate-600">
-                      {id.did}
+                      {id.did ?? "No DID registered"}
                     </p>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    <RoleBadge role={id.role} size="sm" />
-                    <VerificationBadge verified={id.verified} className="text-[10px]" />
                   </div>
                 </div>
               ))}

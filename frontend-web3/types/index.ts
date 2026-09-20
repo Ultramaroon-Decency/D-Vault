@@ -26,6 +26,7 @@ export type Permission =
 export interface Identity {
   did: string;                    // e.g. did:ethr:0xabc…
   address: `0x${string}`;
+  walletAddress?: string;
   controller: `0x${string}`;
   role: Role;
   verified: boolean;

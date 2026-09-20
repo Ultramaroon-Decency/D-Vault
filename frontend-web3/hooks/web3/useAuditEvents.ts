@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { AuditEvent, AuditFilters } from "@/types";
+import type { AuditEvent, AuditFilters, Identity, Role } from "@/types";
 import { mockStore } from "@/mock/store";
 import { MOCK_MODE, API_URL } from "@/config/app";
 import { getAuthToken } from "@/lib/web3/authStorage";
@@ -118,29 +118,66 @@ export function usePlatformStats() {
     })
       .then((r) => r.json())
       .then((json) => setStats(json))
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   return stats;
+}
+
+export interface UserIdentity extends Identity {
+  walletAddress: string;
 }
 
 /**
  * All registered identities (for admin view).
  * Real mode: calls GET /api/users.
  */
-export function useAllIdentities() {
-  const [identities, setIdentities] = useState<{ walletAddress: string; did: string | null }[]>([]);
+export function useAllIdentities(): {
+  identities: UserIdentity[];
+  isLoading: boolean;
+} {
+  const [identities, setIdentities] = useState<UserIdentity[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    if (MOCK_MODE) { setIdentities(mockStore.listIdentities() as never); return; }
+    if (MOCK_MODE) {
+      setIdentities(
+        mockStore.listIdentities().map((i) => ({
+          ...i,
+          walletAddress: i.address,
+        }))
+      );
+      return;
+    }
     setIsLoading(true);
     const token = getAuthToken();
     fetch(`${API_URL}/api/users`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then((r) => r.json())
-      .then((json) => setIdentities(json.users ?? json ?? []))
+      .then((json) => {
+        const rawList: Record<string, unknown>[] = Array.isArray(json?.users)
+          ? json.users
+          : Array.isArray(json)
+            ? json
+            : [];
+        const mapped: UserIdentity[] = rawList.map((u) => {
+          const rawAddr = (u.address ?? u.walletAddress ?? "0x0000000000000000000000000000000000000000") as string;
+          const address = (rawAddr.startsWith("0x") ? rawAddr : `0x${rawAddr}`) as `0x${string}`;
+          return {
+            did: (u.did as string) || `did:ethr:${address}`,
+            address,
+            walletAddress: (u.walletAddress as string) || address,
+            controller: (u.controller as `0x${string}`) || address,
+            role: (u.role as Role) || "USER",
+            verified: Boolean(u.verified),
+            createdAtBlock: Number(u.createdAtBlock) || 0,
+            createdAtTimestamp: u.createdAt ? new Date(u.createdAt as string).getTime() : Date.now(),
+            createdAtTx: (u.createdAtTx as `0x${string}`) || ("0x" as `0x${string}`),
+          };
+        });
+        setIdentities(mapped);
+      })
       .catch(() => setIdentities([]))
       .finally(() => setIsLoading(false));
   }, []);
