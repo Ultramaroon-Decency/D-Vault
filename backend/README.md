@@ -1,297 +1,180 @@
-# SIH 2026 — Backend API
-### Blockchain-Based Secure Platform for Identity, Access Control & Digital Asset Management
-**Problem Statement ID: 26125 | Organisation: Bharat Electronics Limited**
+# D-Vault Backend API Service
+
+REST API service for the D-Vault decentralized identity, role-based access control, and verifiable digital asset management platform. Built with Express.js, TypeScript, Prisma ORM, and Ethers.js.
 
 ---
 
-## Tech Stack
+## Tech Stack & Dependencies
 
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js 18+ |
-| Framework | Express.js + TypeScript |
-| Database | PostgreSQL + Prisma ORM (v5) |
-| Blockchain | ethers.js v6 (Ethereum Sepolia) |
-| IPFS | Pinata REST API |
-| Auth | SIWE-inspired nonce challenge + JWT |
-| Validation | express-validator + Zod (env only) |
-| Security | Helmet, express-rate-limit, CORS |
-| File Upload | multer v2 (memory storage, 10 MB) |
-| Tests | Jest + Supertest (16 tests) |
-
----
-
-## Monorepo Architecture
-
-- **[`backend/`](../backend/)**: Node.js & Express REST API built with TypeScript, Prisma ORM, Ethers.js, SIWE, and Google OAuth.
-- **[`frontend/`](../frontend/)**: **(Active)** Modern Web3 UI built with Next.js, featuring wallet connection and Google Sign-In.
-- **[`frontend-web3/`](../frontend-web3/)**: **(Deprecated)** Legacy frontend implementation.
-- **[`security/`](../security/)**: Security audits, secret scanning, and QA scripts.
-- **[`docker-compose.yml`](../docker-compose.yml)**: Multi-container local orchestration (PostgreSQL 16, Backend API, Frontend).
+| Layer | Technology | Purpose |
+|---|---|---|
+| **Runtime** | Node.js 18+ (Node 20+ recommended) | JavaScript/TypeScript execution environment |
+| **Framework** | Express.js 4.19 + TypeScript 5.5 | HTTP routing and middleware pipeline |
+| **Database** | PostgreSQL 16+ via Prisma ORM 5.14 | Relational data persistence with parameterized queries |
+| **Auth & Crypto** | Ethers.js v6, jsonwebtoken, UUID v4 | ECDSA signature verification, SIWE challenge generation, JWT issuance |
+| **OAuth** | google-auth-library 11.0 | Server-side Google ID token cryptographic verification |
+| **Security** | Helmet 7.1, express-rate-limit 7.3, CORS | Content Security Policy, rate limiting, and CORS validation |
+| **File Upload** | Multer 2.0 (memory storage) + Magic-Byte Engine | Binary inspection (JPEG, PNG, GIF, WEBP, PDF) before IPFS pinning |
+| **IPFS / Web3** | Pinata REST API + Sepolia Contract Bindings | Decentralized metadata pinning and blockchain event indexing |
+| **Testing** | Jest 29.7 + Supertest 7.0 + ts-jest | Unit and integration test suites (**21/21 passed**) |
 
 ---
 
-## Local Development Quickstart
+## Architecture & Security Controls
 
-### 1. Configure Environment Variables
+1. **JWT Expiry & Invalidation**:
+   - Secrets must contain at least 32 characters of high-entropy data (enforced via Zod schema at startup).
+   - Tokens default to a short 1-hour expiration (`1h`).
+   - Every user record contains a `tokenVersion` counter. Whenever a user logs out (`POST /api/auth/logout`) or logs in, the version is incremented. The `authenticate` middleware compares the token claim against PostgreSQL; stale tokens are immediately rejected with `401 Unauthorized`.
+2. **Access Control (IDOR & Role Reconnaissance)**:
+   - `GET /api/users/:address` and `GET /api/users/:address/did` verify the caller is requesting their own address or has `ADMIN` role.
+   - `GET /api/roles/:address` prevents unauthenticated or cross-user reconnaissance of administrative accounts.
+3. **API Defenses & Headers**:
+   - **Helmet CSP**: Restrictive policy (`default-src 'self'`, `object-src 'none'`, `frame-src 'none'`, explicit wallet RPC & Pinata connect origins).
+   - **Payload Limit**: `express.json` and `express.urlencoded` restricted to `100kb` to thwart body-overflow DoS.
+   - **Rate Limiting**: Multi-tier limits (100 req / 15 min globally; 10 req / 15 min for auth endpoints), with Redis backing when `REDIS_URL` is set and in-memory fallback.
+   - **Health Endpoint**: `GET /health` strips environment and mock details when running in `production`.
+4. **Magic-Byte Binary Inspection**:
+   - File uploads in `POST /api/assets/metadata` inspect actual binary headers (magic numbers) to verify valid image or PDF content rather than blindly trusting the client `Content-Type` header. Spoofing attempts are logged and rejected.
 
-**Backend (`backend/.env`):**
-```bash
-cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL and JWT_SECRET
-```
-Add Google Auth and Whitelists:
+---
+
+## Environment Variables Configuration
+
+Create a `.env` file in `backend/` (modeled after `.env.example`):
+
 ```env
+# ---- Server Configuration ----
+NODE_ENV=development
+PORT=5000
+CORS_ORIGIN=http://localhost:3000
+FRONTEND_URL=http://localhost:3000
+
+# ---- Database ----
+# In Docker mode, this uses postgres:5432. In native mode, localhost:5432.
+DATABASE_URL="postgresql://postgres:D-Vault_dev_only_change_in_prod@localhost:5432/sih_db?schema=public"
+
+# ---- JWT Authentication ----
+# Minimum 32 characters required by env validation
+JWT_SECRET=d3v3lopm3nt_s3cr3t_k3y_32chars_REPLACE_THIS_NOW
+JWT_EXPIRES_IN=1h
+NONCE_TTL_SECONDS=300
+
+# ---- Blockchain (Sepolia) ----
+BLOCKCHAIN_MOCK=true
+CHAIN_ID=11155111
+RPC_URL=https://sepolia.infura.io/v3/YOUR_INFURA_KEY
+DID_REGISTRY_ADDRESS=0x0000000000000000000000000000000000000000
+RBAC_CONTRACT_ADDRESS=0x0000000000000000000000000000000000000000
+NFT_ASSET_ADDRESS=0x0000000000000000000000000000000000000000
+
+# ---- IPFS / Pinata ----
+IPFS_MOCK=true
+PINATA_JWT=your-pinata-jwt-token
+PINATA_GATEWAY=https://gateway.pinata.cloud/ipfs/
+
+# ---- Rate Limiting ----
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX=100
+AUTH_RATE_LIMIT_MAX=10
+# REDIS_URL=redis://localhost:6379   # Optional: falls back to in-memory
+
+# ---- Google OAuth & Whitelists ----
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-google-client-secret
-ADMIN_EMAILS=admin@gmail.com,owner@gmail.com
-MANAGER_EMAILS=manager@gmail.com
+ADMIN_EMAILS=admin@dvault.internal
+MANAGER_EMAILS=manager@dvault.internal
 ```
 
-**Frontend (`frontend/.env.local`):**
-```env
-NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
-NEXT_PUBLIC_API_URL=http://localhost:5000
-```
-> **Note:** To enable Google Sign-In, obtain a Client ID from the [Google Cloud Console](https://console.cloud.google.com). Add `http://localhost:3000` to the **Authorized JavaScript origins**.
+---
 
-### 2. Start Services (Docker)
+## API Reference
+
+### 1. Authentication
+* **`POST /api/auth/nonce`**
+  * *Access*: Public (Rate limited: 10/15min)
+  * *Body*: `{ "walletAddress": "0x..." }`
+  * *Response*: `{ "success": true, "data": { "nonce": "...", "message": "...", "expiresAt": "..." } }`
+* **`POST /api/auth/verify`**
+  * *Access*: Public (Rate limited: 10/15min)
+  * *Body*: `{ "walletAddress": "0x...", "signature": "0x..." }`
+  * *Response*: `{ "success": true, "data": { "token": "...", "expiresIn": "1h" } }`
+* **`POST /api/auth/google/verify`**
+  * *Access*: Public (Rate limited: 10/15min)
+  * *Body*: `{ "idToken": "..." }`
+  * *Response*: `{ "success": true, "data": { "token": "...", "user": { ... } } }`
+* **`GET /api/auth/me`**
+  * *Access*: Authenticated (Bearer JWT)
+  * *Response*: Current authenticated user profile and active role
+* **`POST /api/auth/logout`**
+  * *Access*: Authenticated (Bearer JWT)
+  * *Action*: Increments `tokenVersion` in PostgreSQL, invalidating all issued tokens for this user
+  * *Response*: `{ "success": true, "data": { "message": "Logged out successfully. All tokens invalidated." } }`
+
+### 2. User & Identity Management
+* **`GET /api/users/:address`**
+  * *Access*: Authenticated (Requester must be `:address` OR have `ADMIN` role)
+  * *Response*: User record with linked DID, display name, and auth provider
+* **`GET /api/users/:address/did`**
+  * *Access*: Authenticated (Self or Admin)
+  * *Response*: Decentralized identifier string
+
+### 3. Role Control (RBAC)
+* **`POST /api/roles/assign`**
+  * *Access*: `ADMIN` role only
+  * *Body*: `{ "walletAddress": "0x...", "role": "MANAGER" | "AUDITOR" | "USER" }`
+* **`GET /api/roles/:address`**
+  * *Access*: Authenticated (Self or Admin)
+  * *Response*: Effective assigned role for the specified address
+
+### 4. Assets & Metadata
+* **`POST /api/assets/metadata`**
+  * *Access*: `MANAGER` or `ADMIN`
+  * *Form-Data*: `name`, `description`, `assetType`, `ownerDID`, `file` (optional binary; verified by magic bytes)
+  * *Response*: IPFS CID, gateway URI, and metadata object
+* **`GET /api/assets`**
+  * *Access*: Authenticated
+  * *Query*: `?page=1&limit=20&ownerAddress=0x...`
+* **`GET /api/assets/:tokenId`** & **`GET /api/assets/:tokenId/history`**
+  * *Access*: Authenticated
+
+### 5. Audit & Security Status
+* **`GET /api/audit`**
+  * *Access*: `AUDITOR` or `ADMIN`
+  * *Query*: `?page=1&limit=20&eventType=NFTMinted&actorAddress=0x...`
+  * *Validation*: `eventType` validated against `VALID_EVENT_TYPES` allowlist
+* **`GET /api/security/status`**
+  * *Access*: Authenticated (All roles)
+  * *Response*: Real-time operational security configuration (no secrets exposed), consumed by the frontend Security Center
+* **`GET /health`**
+  * *Access*: Public
+  * *Response*: `{ "success": true, "status": "ok" }` (environment details omitted in production)
+
+---
+
+## Development & Testing Commands
+
 ```bash
-# In the repository root
-docker compose up --build -d
-```
-
-### 3. Setup Database (Backend)
-```bash
-cd backend
+# Install dependencies
 npm install
-npx prisma migrate dev    # creates all tables and schema
-npm run prisma:seed       # seeds: ADMIN, MANAGER, AUDITOR, USER roles
-```
 
-### 4. Run Development Servers
-**Backend:**
-```bash
-cd backend
-npm run dev
-# Server starts at: http://localhost:5000
-# Health check: http://localhost:5000/health
-```
+# Build TypeScript to dist/
+npm run build
 
-**Frontend:**
-```bash
-cd ../frontend
-pnpm install
-pnpm dev
-# Frontend starts at: http://localhost:3000
-```
-
-### 5. Run tests (Backend)
-```bash
-cd backend
+# Run unit and integration tests (21/21 passing)
 npm test
-# → 16 passed, 2 suites
+
+# Run ESLint validation (0 errors, 0 warnings)
+npm run lint
+
+# Synchronize database schema
+npx prisma db push
+
+# Seed initial roles (ADMIN, MANAGER, AUDITOR, USER)
+npm run prisma:seed
+
+# Start development server
+npm run dev
+# Or execute compiled bundle:
+npm run start
 ```
-
----
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DATABASE_URL` | ✅ | — | PostgreSQL connection string |
-| `JWT_SECRET` | ✅ | — | JWT signing secret (min 16 chars) |
-| `JWT_EXPIRES_IN` | — | `7d` | JWT expiry |
-| `NONCE_TTL_SECONDS` | — | `300` | Login challenge expiry (5 min) |
-| `BLOCKCHAIN_MOCK` | — | `true` | Use mock blockchain reads (no RPC needed) |
-| `RPC_URL` | ⚠️ | — | Sepolia RPC URL — required if `BLOCKCHAIN_MOCK=false` |
-| `CHAIN_ID` | — | `11155111` | Ethereum chain ID (Sepolia) |
-| `DID_REGISTRY_ADDRESS` | ⚠️ | — | Deployed DID Registry contract address |
-| `RBAC_CONTRACT_ADDRESS` | ⚠️ | — | Deployed RBAC contract address |
-| `NFT_ASSET_ADDRESS` | ⚠️ | — | Deployed NFT contract address |
-| `IPFS_MOCK` | — | `false` | Use mock IPFS (returns fake CIDs) |
-| `PINATA_JWT` | ⚠️ | — | Pinata JWT — required if `IPFS_MOCK=false` |
-| `PINATA_GATEWAY` | — | `https://gateway.pinata.cloud/ipfs/` | IPFS HTTP gateway |
-| `CORS_ORIGIN` | — | `http://localhost:3000` | Allowed frontend origin |
-| `PORT` | — | `5000` | Server port |
-| `RATE_LIMIT_MAX` | — | `100` | Global req/window |
-| `AUTH_RATE_LIMIT_MAX` | — | `10` | Auth route req/window |
-
-> ⚠️ = only required when the corresponding mock flag is `false`
-
----
-
-## REST API Reference
-
-### Auth (Public)
-
-```
-POST /api/auth/nonce
-  Body: { walletAddress: "0x..." }
-  Response: { nonce, message, expiresAt }
-
-POST /api/auth/verify
-  Body: { walletAddress: "0x...", signature: "0x..." }
-  Response: { token, expiresIn }
-
-GET /api/auth/me   [JWT required]
-  Response: { userId, walletAddress, did, role }
-```
-
-### Users `[JWT required]`
-
-```
-GET /api/users/:address        → { id, walletAddress, did, roles, primaryRole }
-GET /api/users/:address/did    → { walletAddress, did }
-```
-
-### Roles
-
-```
-POST /api/roles/assign  [ADMIN only]
-  Body: { walletAddress: "0x...", role: "MANAGER" }
-  Response: { walletAddress, role, assignedBy }
-
-GET /api/roles/:address [JWT]   → { walletAddress, roles, primaryRole }
-```
-
-### Assets
-
-```
-POST /api/assets/metadata  [MANAGER | ADMIN]
-  Multipart form: name, description, assetType, ownerDID (optional), file (optional image/PDF ≤10MB)
-  Response: { cid, ipfsUri, metadata, metadataUploadStatus: "uploaded" }
-
-GET  /api/assets              [JWT]   ?page=1&limit=20&ownerAddress=0x...
-GET  /api/assets/:tokenId     [JWT]
-GET  /api/assets/:tokenId/history [JWT]
-```
-
-### Audit
-
-```
-GET /api/audit  [AUDITOR | ADMIN]
-  ?page=1&limit=20&eventType=NFTMinted&actorAddress=0x...
-  Response: AuditEvent[]
-```
-
-### System
-
-```
-GET /health   → { status: "ok", uptime, timestamp }
-```
-
----
-
-## Authentication Flow
-
-```
-1.  Frontend  →  POST /api/auth/nonce  { walletAddress }
-2.  Backend   ←  { nonce, message }
-3.  Frontend  →  wallet.signMessage(message)   ← MetaMask / ethers.js
-4.  Frontend  →  POST /api/auth/verify { walletAddress, signature }
-5.  Backend   ←  { token, expiresIn }
-6.  Frontend  →  Authorization: Bearer <token>   (all subsequent requests)
-```
-
-> The sign message format is deterministic (no timestamp) so the backend can reconstruct it exactly on verify.
-
----
-
-## NFT Minting Flow
-
-```
-MANAGER → POST /api/assets/metadata   (validate + upload to IPFS)
-        ←  { cid, ipfsUri }
-MANAGER → wallet.signAndSend( nftContract.mint(cid, ownerDID) )   ← MetaMask
-        → Smart Contract emits NFTMinted(tokenId, owner, metadataCID)
-Backend Indexer → picks up event → writes confirmed Asset + AuditEvent to DB
-USER    → GET /api/assets   ← confirmed asset appears
-```
-
-> ⚠️ The backend **never holds private keys** and **never calls mint()**. NFT minting is always signed by the wallet in the browser.
-
----
-
-## RBAC Role Matrix
-
-| Role | Assign Roles | Upload Metadata | Read Audit | Read Assets/Users |
-|---|---|---|---|---|
-| ADMIN | ✅ | ✅ | ✅ | ✅ |
-| MANAGER | ❌ | ✅ | ❌ | ✅ |
-| AUDITOR | ❌ | ❌ | ✅ | ✅ |
-| USER | ❌ | ❌ | ❌ | ✅ |
-
----
-
-## Connecting Real Smart Contracts
-
-When the blockchain team deploys contracts on Sepolia:
-
-1. **Copy real ABIs** into `backend/abis/`:
-   - `DIDRegistry.json`
-   - `RBACContract.json`
-   - `NFTAsset.json`
-
-2. **Update `.env`**:
-```env
-BLOCKCHAIN_MOCK=false
-RPC_URL=https://sepolia.infura.io/v3/YOUR_KEY
-DID_REGISTRY_ADDRESS=0x...
-RBAC_CONTRACT_ADDRESS=0x...
-NFT_ASSET_ADDRESS=0x...
-```
-
-3. **Update `src/config/contracts.ts`** — set the correct `ROLE_BYTES32` hashes to match your contract's `keccak256(roleName)` values.
-
----
-
-## Connecting Pinata IPFS
-
-1. Create an API key at [app.pinata.cloud/keys](https://app.pinata.cloud/keys)
-2. **Update `.env`**:
-```env
-IPFS_MOCK=false
-PINATA_JWT=eyJhbGc...
-```
-
----
-
-## Project Structure
-
-```
-backend/
-├── src/
-│   ├── config/          env.ts, contracts.ts
-│   ├── routes/          auth, user, role, asset, audit
-│   ├── controllers/     auth, user, role, asset, audit
-│   ├── services/        auth, user, role, asset, blockchain, ipfs
-│   ├── middleware/       auth, rbac, validation, error
-│   ├── blockchain/      provider, contracts, eventListener
-│   ├── db/              prisma.ts, __mocks__/prisma.ts
-│   ├── types/           index.ts
-│   ├── utils/           logger.ts
-│   ├── app.ts
-│   └── server.ts
-├── prisma/              schema.prisma (8 models), seed.ts
-├── abis/                DIDRegistry, RBACContract, NFTAsset (mock → swap with real)
-├── tests/               auth.test.ts (6), rbac.test.ts (10), setup.ts
-├── .env                 (BLOCKCHAIN_MOCK=true, IPFS_MOCK=true by default)
-├── .env.example
-├── jest.config.ts
-└── README.md
-```
-
----
-
-## npm Scripts
-
-| Script | Description |
-|---|---|
-| `npm run dev` | Start with ts-node-dev (hot reload) |
-| `npm run build` | Compile TypeScript → `dist/` |
-| `npm start` | Run compiled `dist/server.js` |
-| `npm test` | Run Jest test suite |
-| `npm run prisma:migrate` | Apply DB migrations |
-| `npm run prisma:seed` | Seed roles + indexer state |
-| `npm run prisma:studio` | Open Prisma Studio (DB GUI) |

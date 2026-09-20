@@ -109,9 +109,15 @@ contract RBACManager {
     /**
      * @notice Revoke a role from an account (set to NONE / zero bytes).
      * @param account The wallet address to revoke the role from.
+     *
+     * SECURITY FIX (VULN-08): Admin cannot revoke their own role.
+     * This prevents the sole admin from permanently bricking the contract
+     * with no recovery path.
      */
     function revokeRole(address account) external onlyAdmin {
         if (account == address(0)) revert ZeroAddress();
+        // SECURITY: Prevent admin self-revocation which would permanently lock the contract
+        if (account == msg.sender) revert NotAdmin(msg.sender);
 
         bytes32 previousRole = _roles[account];
         _roles[account] = bytes32(0);

@@ -58,6 +58,11 @@ COPY --from=builder /app/abis ./abis
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
+# SECURITY: Run as non-root user (VULN-12)
+# This limits blast radius if the application is exploited.
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
 EXPOSE 5000
 
 ENTRYPOINT ["./docker-entrypoint.sh"]

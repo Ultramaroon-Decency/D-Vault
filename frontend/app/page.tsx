@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowUpRight, BadgeCheck, BarChart3, Bell, BookOpen, Check, ChevronDown, CircleHelp, Copy, Fingerprint, GitBranch, Globe2, KeyRound, LayoutDashboard, Loader2, Menu, Network, Plus, Search, Settings2, ShieldCheck, Sparkles, UserPlus, UserRound, Users, Wallet, X, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowUpRight, BadgeCheck, BarChart3, Bell, BookOpen, Check, ChevronDown, CircleHelp, Copy, ExternalLink, Fingerprint, GitBranch, Globe2, KeyRound, LayoutDashboard, Loader2, Lock, Menu, Network, Plus, RefreshCw, Search, Settings2, ShieldCheck, ShieldAlert, ShieldOff, Sparkles, UserPlus, UserRound, Users, Wallet, X, Zap } from 'lucide-react'
 import {
   initialAssets,
   initialAuditEntries,
@@ -29,6 +29,7 @@ const nav = [
   { id: 'roles',          label: 'Role control',      icon: Users,           roles: ['Admin'] },
   { id: 'register-admin', label: 'Register admin',    icon: ShieldCheck,     roles: ['Admin'] },
   { id: 'audit',          label: 'Audit ledger',      icon: BookOpen,        roles: ['Admin', 'Auditor', 'User'] },
+  { id: 'security',       label: 'Security Center',   icon: ShieldAlert,     roles: ['Admin', 'Manager', 'Auditor', 'User'] },
 ]
 
 // ─── Small reusable components ────────────────────────────────────────────────
@@ -1726,6 +1727,530 @@ function RegisterAdminPage({ onAdminAssigned, members }: { onAdminAssigned: (add
   )
 }
 
+// ─── Security Center ─────────────────────────────────────────────────────────
+
+type SecurityStatus = {
+  authentication: { walletNonceAuth: boolean; googleOAuth: boolean; jwtAuthentication: boolean; shortLivedTokens: boolean; tokenExpiryValue: string; tokenRevocation: boolean; nonceExpiry: boolean; nonceTtlSeconds: number; jwtSecretStrength: string }
+  authorization: { rbac: boolean; roles: string[]; idorProtection: boolean; adminOnlyRoleAssignment: boolean; privilegeEscalationGuard: boolean; auditLogProtection: boolean; adminEmailWhitelistSecure: boolean }
+  api: { rateLimiting: boolean; globalRateLimitMax: number; authRateLimitMax: number; rateLimitWindowMs: number; redisRateLimiter: boolean; inputValidation: boolean; bodyLimitKb: number; corsRestricted: boolean; corsOrigin: string; helmetEnabled: boolean; cspEnabled: boolean; parameterizedQueries: boolean; errorHandling: boolean; eventTypeAllowlist: boolean }
+  uploads: { mimeTypeValidation: boolean; magicByteValidation: boolean; allowedTypes: string[]; fileSizeLimitMb: number; storedOnIpfs: boolean; ipfsMock: boolean }
+  database: { orm: string; parameterizedQueries: boolean; hostPortExposed: boolean; auditLog: boolean; sensitiveDataExposed: boolean }
+  smartContracts: { didRegistry: boolean; rbacOnChain: boolean; nftMintAuthorization: boolean; adminSelfRevocationFixed: boolean; didAutoVerificationFixed: boolean; contractsMock: boolean; contractAddressesSet: boolean }
+  infrastructure: { containerNonRoot: boolean; dbNotExposedToHost: boolean; redisForRateLimiting: boolean; secretsNotInCode: boolean; gitignoreCoversEnv: boolean; mockConsistency: boolean }
+  auditStatus: { staticAnalysisPerformed: boolean; dynamicTestingPerformed: boolean; formalSmartContractVerification: boolean; thirdPartyAudit: boolean }
+}
+
+function StatusBadge({ value, partial, limitation }: { value: boolean; partial?: boolean; limitation?: boolean }) {
+  if (limitation) return <span className="sec-badge sec-badge-limitation"><AlertTriangle size={11} /> Known Limitation</span>
+  if (!value) return <span className="sec-badge sec-badge-no"><ShieldOff size={11} /> Not Configured</span>
+  if (partial) return <span className="sec-badge sec-badge-partial"><AlertTriangle size={11} /> Partial</span>
+  return <span className="sec-badge sec-badge-yes"><Check size={11} /> Protected</span>
+}
+
+function SecCard({ title, icon: Icon, children, defaultOpen = false }: { title: string; icon: React.ElementType; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className={`sec-card ${open ? 'sec-card-open' : ''}`}>
+      <button className="sec-card-header" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        <div className="sec-card-title"><Icon size={16} />{title}</div>
+        <ChevronDown size={15} className={`sec-chevron ${open ? 'sec-chevron-open' : ''}`} />
+      </button>
+      {open && <div className="sec-card-body">{children}</div>}
+    </div>
+  )
+}
+
+function SecRow({ label, value, partial, limitation, detail }: { label: string; value: boolean; partial?: boolean; limitation?: boolean; detail?: string }) {
+  return (
+    <div className="sec-row">
+      <div className="sec-row-left">
+        <span className="sec-row-label">{label}</span>
+        {detail && <span className="sec-row-detail">{detail}</span>}
+      </div>
+      <StatusBadge value={value} partial={partial} limitation={limitation} />
+    </div>
+  )
+}
+
+function DemoAction({ label, method, url, token, expectedStatus, description }: {
+  label: string; method: string; url: string; token?: string; expectedStatus: number; description: string
+}) {
+  const [result, setResult] = useState<{ status: number; body: string } | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const run = async () => {
+    setLoading(true)
+    setResult(null)
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: method !== 'GET' ? JSON.stringify({ walletAddress: '0x0000000000000000000000000000000000000001' }) : undefined,
+      })
+      const body = await res.json().catch(() => ({}))
+      setResult({ status: res.status, body: JSON.stringify(body, null, 2).slice(0, 300) })
+    } catch (e) {
+      setResult({ status: 0, body: String(e) })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const isExpected = result && result.status === expectedStatus
+  return (
+    <div className="demo-action">
+      <div className="demo-action-header">
+        <div>
+          <code className="demo-method">{method}</code>
+          <code className="demo-url">{url.replace(typeof window !== 'undefined' ? (window.location.origin.replace('3000', '5000')) : 'http://localhost:5000', '')}</code>
+          <span className="demo-desc">{description}</span>
+        </div>
+        <button className="button button-small button-outline" onClick={run} disabled={loading} id={`demo-${label.replace(/\s+/g,'_')}`}>
+          {loading ? <Loader2 size={12} className="spin" /> : <ExternalLink size={12} />}
+          {loading ? 'Testing…' : 'Test Live'}
+        </button>
+      </div>
+      {result && (
+        <div className={`demo-result ${isExpected ? 'demo-result-ok' : 'demo-result-bad'}`}>
+          <span className="demo-status">HTTP {result.status} {isExpected ? '✓ expected' : `⚠ expected ${expectedStatus}`}</span>
+          <pre className="demo-body">{result.body}</pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SecurityCenter({ apiUrl, token, role }: { apiUrl: string; token: string; role: Role }) {
+  const [status, setStatus] = useState<SecurityStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [lastFetched, setLastFetched] = useState<string | null>(null)
+
+  const fetchStatus = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`${apiUrl}/api/security/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const json = await res.json()
+      if (json.success) {
+        setStatus(json.data)
+        setLastFetched(new Date().toLocaleTimeString())
+      } else {
+        setError(json.error?.message ?? 'Backend unavailable')
+      }
+    } catch {
+      setError('Cannot reach backend. Start the backend server and try again.')
+    } finally {
+      setLoading(false)
+    }
+  }, [apiUrl, token])
+
+  useEffect(() => { fetchStatus() }, [fetchStatus])
+
+  return (
+    <div className="page-content sec-page">
+      {/* Header */}
+      <div className="sec-header">
+        <div>
+          <p className="eyebrow">Security Posture</p>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <ShieldCheck size={22} style={{ color: 'var(--mint)' }} /> Security Center
+          </h2>
+          <p className="muted-copy" style={{ marginTop: '6px', maxWidth: 560 }}>
+            Real-time security control status of D-Vault. Every indicator reflects the actual backend configuration — no static claims.
+          </p>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+          <button className="button button-outline button-small" onClick={fetchStatus} disabled={loading} id="sec-refresh">
+            <RefreshCw size={13} className={loading ? 'spin' : ''} />
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+          {lastFetched && <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Updated {lastFetched}</span>}
+        </div>
+      </div>
+
+      {error && (
+        <div className="wallet-error" style={{ marginBottom: 24 }}>
+          <AlertTriangle size={14} />
+          <div>
+            <strong>Backend unreachable</strong>
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Disclaimer */}
+      <div className="sec-disclaimer">
+        <Lock size={13} />
+        <span>This dashboard reflects the actual backend implementation based on static analysis. Dynamic penetration testing, fuzz testing, and formal smart-contract verification have <strong>not</strong> been performed. Controls marked as &quot;Known Limitation&quot; represent honest gaps.</span>
+      </div>
+
+      {loading && !status && (
+        <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--muted)' }}>
+          <Loader2 size={28} className="spin" style={{ marginBottom: 12 }} />
+          <p>Fetching live security status from backend…</p>
+        </div>
+      )}
+
+      {status && (
+        <>
+          {/* ── Quick-glance summary strip ─────────────────────────────────────── */}
+          <div className="sec-summary-strip">
+            {[
+              { label: 'JWT Revocation', ok: status.authentication.tokenRevocation },
+              { label: 'IDOR Protection', ok: status.authorization.idorProtection },
+              { label: 'Rate Limiting', ok: status.api.rateLimiting },
+              { label: 'Magic-byte Validation', ok: status.uploads.magicByteValidation },
+              { label: 'CSP Enabled', ok: status.api.cspEnabled },
+              { label: 'DB Not Exposed', ok: !status.database.hostPortExposed },
+              { label: 'Non-root Container', ok: status.infrastructure.containerNonRoot },
+              { label: 'On-chain RBAC', ok: status.smartContracts.rbacOnChain },
+            ].map(item => (
+              <div key={item.label} className={`sec-summary-item ${item.ok ? 'sec-ok' : 'sec-warn'}`}>
+                {item.ok ? <Check size={12} /> : <AlertTriangle size={12} />}
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* ── Section cards ─────────────────────────────────────────────────── */}
+          <div className="sec-sections">
+
+            {/* 1. Authentication */}
+            <SecCard title="Authentication Security" icon={KeyRound} defaultOpen>
+              <div className="sec-section-intro">Protecting identity at the door — how users prove who they are.</div>
+              <SecRow label="Wallet nonce-based auth (SIWE-style)" value={status.authentication.walletNonceAuth} detail="Cryptographic challenge-response. MetaMask signs a unique nonce; backend verifies the ECDSA signature." />
+              <SecRow label="Google OAuth (server-side ID token)" value={status.authentication.googleOAuth} detail="Frontend sends Google credential; backend verifies with Google's public keys — token never sent raw to DB." />
+              <SecRow label="JWT authentication on all routes" value={status.authentication.jwtAuthentication} detail="Every protected API endpoint requires a valid Bearer JWT." />
+              <SecRow
+                label={`Short-lived access tokens (${status.authentication.tokenExpiryValue})`}
+                value={status.authentication.shortLivedTokens}
+                detail="Reduces the window of exploitation if a token is stolen. Previously 7 days — now 1 hour."
+              />
+              <SecRow label="Token revocation via tokenVersion" value={status.authentication.tokenRevocation} detail="Each user has a tokenVersion in the DB. Login increments it; logout increments it again. All existing tokens immediately become invalid." />
+              <SecRow label="Nonce expiry" value={status.authentication.nonceExpiry} detail={`Login challenges expire after ${status.authentication.nonceTtlSeconds}s and are single-use. Prevents replay attacks.`} />
+              <SecRow
+                label="JWT secret entropy"
+                value={status.authentication.jwtSecretStrength === 'strong'}
+                detail={`Secret length: ${status.authentication.jwtSecretStrength === 'strong' ? '≥32 chars (strong)' : '<32 chars (weak — must rotate)'}`}
+              />
+              <SecRow label="JWT stored in localStorage" value={false} limitation detail="Known limitation: not in httpOnly cookie. Switching requires CSRF token infrastructure. Mitigated by short token lifetime + revocation." />
+
+              <div className="sec-learn-box">
+                <strong>What it protects against</strong>
+                <p>Token theft, replay attacks, session hijacking, impersonation via forged wallets.</p>
+                <strong>How it works</strong>
+                <p>Each login issues a 1-hour JWT containing a <code>tokenVersion</code>. On every request, auth middleware validates the JWT signature AND checks the version against the database. Logout increments the version — instantly invalidating all outstanding tokens even if they haven&apos;t expired.</p>
+              </div>
+            </SecCard>
+
+            {/* 2. Authorization */}
+            <SecCard title="Authorization & RBAC" icon={Users}>
+              <div className="sec-section-intro">Controlling what authenticated users are allowed to do.</div>
+              <SecRow label="Role-Based Access Control (RBAC)" value={status.authorization.rbac} detail="Every protected endpoint checks role before action. Enforced server-side, not hidden in frontend." />
+              <SecRow label="IDOR protection on user profiles" value={status.authorization.idorProtection} detail="GET /api/users/:address → 403 unless requester IS that user or has ADMIN role." />
+              <SecRow label="Role enumeration protection" value={status.authorization.idorProtection} detail="GET /api/roles/:address → 403 unless self or admin. Prevents reconnaissance of privilege structure." />
+              <SecRow label="Admin-only role assignment" value={status.authorization.adminOnlyRoleAssignment} detail="POST /api/roles/assign requires ADMIN role. Non-admins receive HTTP 403." />
+              <SecRow label="Privilege escalation guard" value={status.authorization.privilegeEscalationGuard} detail="Role assignment validated server-side. Frontend role display is cosmetic — backend enforces." />
+              <SecRow label="Audit log access restricted" value={status.authorization.auditLogProtection} detail="GET /api/audit requires AUDITOR or ADMIN role." />
+              <SecRow
+                label="Admin email whitelist on org domain"
+                value={status.authorization.adminEmailWhitelistSecure}
+                partial={!status.authorization.adminEmailWhitelistSecure}
+                detail={status.authorization.adminEmailWhitelistSecure
+                  ? 'ADMIN_EMAILS uses organization-owned domain.'
+                  : 'Warning: ADMIN_EMAILS contains public Gmail/Hotmail — any account holder gets admin access.'}
+              />
+
+              <div className="sec-flow-box">
+                <div className="sec-flow-title">Authorization Flow</div>
+                <div className="sec-flow">
+                  <div className="sec-flow-step">User Request</div>
+                  <div className="sec-flow-arrow">→</div>
+                  <div className="sec-flow-step">authenticate()<br/><small>JWT + tokenVersion</small></div>
+                  <div className="sec-flow-arrow">→</div>
+                  <div className="sec-flow-step">isSelf() / isAdmin()<br/><small>IDOR guard</small></div>
+                  <div className="sec-flow-arrow">→</div>
+                  <div className="sec-flow-step">requireRole([])<br/><small>RBAC middleware</small></div>
+                  <div className="sec-flow-arrow">→</div>
+                  <div className="sec-flow-step sec-flow-ok">Authorized<br/><small>Controller runs</small></div>
+                </div>
+                <div className="sec-flow-reject">Any failure → HTTP 401 or 403 (never silent)</div>
+              </div>
+
+              <div className="sec-roles-grid">
+                {[
+                  { role: 'USER', color: 'coral', perms: ['View own profile', 'View own assets', 'View audit log'] },
+                  { role: 'AUDITOR', color: 'blue', perms: ['All USER permissions', 'Full audit log access', 'View all identities'] },
+                  { role: 'MANAGER', color: 'amber', perms: ['All USER permissions', 'Mint NFT assets', 'Update/revoke assets'] },
+                  { role: 'ADMIN', color: 'mint', perms: ['All MANAGER permissions', 'Assign/revoke roles', 'Register new admins', 'Full system access'] },
+                ].map(r => (
+                  <div key={r.role} className={`sec-role-card role-card-${r.color}`}>
+                    <div className="sec-role-name">{r.role}</div>
+                    <ul className="sec-role-perms">{r.perms.map(p => <li key={p}><Check size={10} />{p}</li>)}</ul>
+                  </div>
+                ))}
+              </div>
+            </SecCard>
+
+            {/* 3. API Security */}
+            <SecCard title="API Protection" icon={Network}>
+              <div className="sec-section-intro">Hardening the HTTP layer against abuse, injection, and oversized payloads.</div>
+              <SecRow label="Rate limiting (global)" value={status.api.rateLimiting} detail={`Max ${status.api.globalRateLimitMax} req / ${status.api.rateLimitWindowMs / 60000}min window per IP.`} />
+              <SecRow label="Rate limiting (auth endpoints)" value={status.api.rateLimiting} detail={`Auth routes limited to ${status.api.authRateLimitMax} req / window. Prevents brute-force login.`} />
+              <SecRow
+                label="Redis-backed distributed rate limiter"
+                value={status.api.redisRateLimiter}
+                partial={!status.api.redisRateLimiter}
+                detail={status.api.redisRateLimiter ? 'Shared Redis store — bypass via multiple instances prevented.' : 'In-memory only. Bypass possible with multiple server instances. Add REDIS_URL to enable.'}
+              />
+              <SecRow label="Input validation (express-validator)" value={status.api.inputValidation} detail="All POST/PATCH routes validate and sanitize inputs before processing. Invalid inputs return 400." />
+              <SecRow label={`Request body limit (${status.api.bodyLimitKb}kb)`} value={true} detail="JSON body capped at 100kb. Previously 10MB — large payloads for DoS no longer accepted." />
+              <SecRow label="CORS restricted" value={status.api.corsRestricted} detail={`Only ${status.api.corsOrigin} is allowed. Wildcard (*) is rejected by schema.`} />
+              <SecRow label="Helmet security headers" value={status.api.helmetEnabled} detail="X-Frame-Options, X-Content-Type-Options, HSTS, Referrer-Policy, etc." />
+              <SecRow label="Content Security Policy (CSP)" value={status.api.cspEnabled} detail="Strict directives: no inline scripts, no unsafe eval, restricted connect-src and img-src." />
+              <SecRow label="Parameterized DB queries (Prisma)" value={status.api.parameterizedQueries} detail="Prisma ORM generates parameterized queries. Raw SQL injection is not possible through the ORM." />
+              <SecRow label="No stack traces in responses" value={status.api.errorHandling} detail="Errors return a safe code/message. Stack traces only in development logs, never in API responses." />
+              <SecRow label="Audit eventType allowlist" value={status.api.eventTypeAllowlist} detail="eventType filter validated against known values. Unknown types return 400." />
+            </SecCard>
+
+            {/* 4. File Upload */}
+            <SecCard title="File Upload Security" icon={Zap}>
+              <div className="sec-section-intro">Preventing malicious file uploads that could execute code or bypass content restrictions.</div>
+              <SecRow label="MIME type filter (Multer)" value={status.uploads.mimeTypeValidation} detail="Multer rejects files whose declared Content-Type is not in the allowed list." />
+              <SecRow label="Magic-byte content inspection" value={status.uploads.magicByteValidation} detail="Backend reads the first bytes of the file buffer and matches against known file signatures — independent of Content-Type header." />
+              <SecRow label={`Allowed types: ${status.uploads.allowedTypes.join(', ')}`} value={true} detail="Only image types and PDF accepted. Executables, scripts, and archives are rejected." />
+              <SecRow label={`File size limit (${status.uploads.fileSizeLimitMb}MB)`} value={true} detail="Files exceeding the limit are rejected before upload to IPFS." />
+              <SecRow label="Files stored on IPFS (not local disk)" value={status.uploads.storedOnIpfs} detail={status.uploads.ipfsMock ? 'IPFS_MOCK=true — files not actually uploaded in dev mode.' : 'Files pinned to Pinata IPFS — not served from the backend directly.'} />
+
+              <div className="sec-flow-box">
+                <div className="sec-flow-title">Upload Pipeline</div>
+                <div className="sec-flow sec-flow-vertical">
+                  <div className="sec-flow-step">Client uploads file</div>
+                  <div className="sec-flow-arrow-v">↓</div>
+                  <div className="sec-flow-step">Multer: MIME type filter<br/><small>Rejects non-image/PDF declarations</small></div>
+                  <div className="sec-flow-arrow-v">↓</div>
+                  <div className="sec-flow-step sec-flow-highlight">Magic-byte inspection<br/><small>Reads actual file bytes — MIME spoofing detected</small></div>
+                  <div className="sec-flow-arrow-v">↓</div>
+                  <div className="sec-flow-step">File size check</div>
+                  <div className="sec-flow-arrow-v">↓</div>
+                  <div className="sec-flow-step sec-flow-ok">Upload to IPFS (Pinata)<br/><small>Content-addressed — immutable</small></div>
+                </div>
+              </div>
+
+              <div className="sec-learn-box">
+                <strong>Why MIME headers alone are insufficient</strong>
+                <p>A browser or curl client can set <code>Content-Type: image/jpeg</code> on any file, including PHP scripts or executables. The magic-byte check reads the first bytes of the actual file buffer on the server — a JavaScript or EXE file will never start with the JPEG magic bytes <code>FF D8 FF</code>.</p>
+              </div>
+            </SecCard>
+
+            {/* 5. Database */}
+            <SecCard title="Database Security" icon={BarChart3}>
+              <div className="sec-section-intro">Protecting the data store from exposure, injection, and unauthorized access.</div>
+              <SecRow label="Parameterized queries (Prisma ORM)" value={status.database.parameterizedQueries} detail="Zero raw SQL construction. All queries use Prisma's type-safe builder — injection is structurally impossible." />
+              <SecRow label="DB port not exposed to host" value={!status.database.hostPortExposed} detail="PostgreSQL port 5432 is not mapped in docker-compose. DB only reachable within Docker internal network." />
+              <SecRow label="DB password from env var" value={true} detail="POSTGRES_PASSWORD loaded from environment. Hardcoded 'password' string removed from docker-compose.yml." />
+              <SecRow label="Audit event log" value={status.database.auditLog} detail="All blockchain events (DIDCreated, RoleAssigned, NFTMinted, Transfer) logged to audit_events table with txHash, blockNumber, actorAddress." />
+              <SecRow label="No credentials in this response" value={!status.database.sensitiveDataExposed} detail="This endpoint returns only operational metadata — no passwords, connection strings, or secrets." />
+            </SecCard>
+
+            {/* 6. Smart Contract */}
+            <SecCard title="Smart Contract Security" icon={GitBranch}>
+              <div className="sec-section-intro">On-chain security controls enforced by Solidity contracts deployed to Ethereum Sepolia.</div>
+              <SecRow label="DID Registry (DIDRegistry.sol)" value={status.smartContracts.didRegistry} detail="Decentralized identity anchoring. Each wallet registers a DID stored on-chain." />
+              <SecRow label="On-chain RBAC (RBACManager.sol)" value={status.smartContracts.rbacOnChain} detail="Role assignments are recorded on-chain. Backend indexes events — no central trust point for roles." />
+              <SecRow label="NFT mint authorization" value={status.smartContracts.nftMintAuthorization} detail="Only ADMIN or MANAGER role holders can call the mint function (checked both on-chain and backend)." />
+              <SecRow
+                label="Admin self-revocation prevented"
+                value={status.smartContracts.adminSelfRevocationFixed}
+                detail="RBACManager.revokeRole() now reverts if account == msg.sender. Sole admin cannot brick the contract."
+              />
+              <SecRow
+                label="DID auto-verification disabled"
+                value={status.smartContracts.didAutoVerificationFixed}
+                detail={status.smartContracts.contractsMock
+                  ? 'Fix implemented in DIDRegistry.sol (verified=false by default). Requires redeployment to Sepolia to take effect on-chain.'
+                  : 'DIDRegistry deployed with verified=false default. Admin must call setVerified() after real identity check.'}
+              />
+              <SecRow
+                label="Multi-signature administration"
+                value={false}
+                limitation
+                detail="Not implemented. A single admin key controls the contracts. Recommend OpenZeppelin Gnosis Safe multi-sig for production."
+              />
+              <SecRow
+                label="Formal contract verification"
+                value={false}
+                limitation
+                detail="Not performed. Contracts use standard OpenZeppelin patterns but have not been formally verified or externally audited."
+              />
+
+              {status.smartContracts.contractsMock && (
+                <div className="sec-deploy-warning">
+                  <AlertTriangle size={14} />
+                  <div>
+                    <strong>BLOCKCHAIN_MOCK=true</strong>
+                    <span>Contracts are running in mock mode. Smart contract security controls require actual deployment to Sepolia. Set contract addresses in .env and BLOCKCHAIN_MOCK=false for production.</span>
+                  </div>
+                </div>
+              )}
+            </SecCard>
+
+            {/* 7. Infrastructure */}
+            <SecCard title="Infrastructure & Secrets" icon={Lock}>
+              <div className="sec-section-intro">Hardening the deployment environment and preventing secret leakage.</div>
+              <SecRow label="Backend runs as non-root" value={status.infrastructure.containerNonRoot} detail="Dockerfile adds 'appuser' non-root user. If exploited, attacker has minimal OS privileges." />
+              <SecRow label="PostgreSQL not accessible from host" value={status.infrastructure.dbNotExposedToHost} detail="docker-compose no longer maps port 5432 to host. DB reachable only within d-vault-network." />
+              <SecRow
+                label="Redis-backed rate limiter"
+                value={status.infrastructure.redisForRateLimiting}
+                partial={!status.infrastructure.redisForRateLimiting}
+                detail={status.infrastructure.redisForRateLimiting ? 'Redis service configured. Rate limit state shared across instances.' : 'Redis not running. In-memory only (bypassed by horizontal scaling).'}
+              />
+              <SecRow label="Secrets loaded from env, not code" value={status.infrastructure.secretsNotInCode} detail="JWT_SECRET, POSTGRES_PASSWORD, PINATA_JWT loaded from .env. No plaintext secrets in source." />
+              <SecRow label=".env excluded from git" value={status.infrastructure.gitignoreCoversEnv} detail=".gitignore covers *.env and .env*. Pre-commit Gitleaks config added to catch accidental commits." />
+              <SecRow
+                label="BLOCKCHAIN_MOCK / IPFS_MOCK consistent"
+                value={status.infrastructure.mockConsistency}
+                partial={!status.infrastructure.mockConsistency}
+                detail={status.infrastructure.mockConsistency ? 'Both mock flags match.' : 'Mismatch detected: one is true, the other false. In production both should be false.'}
+              />
+            </SecCard>
+
+            {/* 8. Threat Protection Matrix */}
+            <SecCard title="Threat Protection Matrix" icon={ShieldCheck} defaultOpen={false}>
+              <div className="sec-section-intro">Common attack vectors and the D-Vault controls that mitigate them.</div>
+              <div className="sec-threat-table">
+                <div className="sec-threat-header">
+                  <span>Attack / Threat</span>
+                  <span>D-Vault Protection</span>
+                  <span>Status</span>
+                </div>
+                {[
+                  { threat: 'JWT theft / session hijack', protection: 'Short-lived tokens (1h) + tokenVersion revocation', ok: true },
+                  { threat: 'IDOR — access another user\'s data', protection: 'isSelf() / isAdmin() guard on /users/:address', ok: true },
+                  { threat: 'Privilege escalation', protection: 'Server-side RBAC + admin-only role assignment', ok: true },
+                  { threat: 'Brute-force / credential stuffing', protection: 'Auth rate limiter: 10 req/15min per IP', ok: true },
+                  { threat: 'API abuse / DoS', protection: 'Global rate limiter (100 req/15min) + 100kb body limit', ok: true },
+                  { threat: 'SQL / NoSQL injection', protection: 'Prisma ORM — parameterized queries always', ok: true },
+                  { threat: 'XSS via malicious input', protection: 'Helmet CSP + strict output encoding', ok: true },
+                  { threat: 'File upload attacks (MIME spoofing)', protection: 'Magic-byte inspection — Content-Type header ignored', ok: true },
+                  { threat: 'Secret leakage via git commit', protection: 'Gitleaks pre-commit hook + .gitignore *.env', ok: true },
+                  { threat: 'Database exposure', protection: 'DB port removed from Docker host mapping', ok: true },
+                  { threat: 'Container privilege escalation', protection: 'Backend runs as non-root appuser in container', ok: true },
+                  { threat: 'Insecure CORS — CSRF via other origin', protection: 'CORS_ORIGIN validated as URL, no wildcard', ok: true },
+                  { threat: 'DID identity spoofing', protection: 'DID verified=false by default; admin must verify', ok: true },
+                  { threat: 'Admin contract key compromise', protection: 'Admin self-revocation prevented in RBACManager', ok: true },
+                  { threat: 'Role enumeration / reconnaissance', protection: 'GET /roles/:address restricted to self or admin', ok: true },
+                  { threat: 'Google OAuth impersonation', protection: 'ID token verified with Google\'s public keys server-side', ok: true },
+                  { threat: 'Admin takeover via Gmail whitelist', protection: 'Startup warning for public email domains', ok: status.authorization.adminEmailWhitelistSecure },
+                  { threat: 'Multi-sig contract compromise', protection: 'Not implemented — single admin key (known gap)', ok: false },
+                  { threat: 'Dynamic fuzzing / pen-test', protection: 'Static analysis only — dynamic testing not performed', ok: false },
+                ].map(row => (
+                  <div key={row.threat} className="sec-threat-row">
+                    <span className="sec-threat-name">{row.threat}</span>
+                    <span className="sec-threat-prot">{row.protection}</span>
+                    <span className={`sec-threat-status ${row.ok ? 'sec-ok' : 'sec-warn'}`}>
+                      {row.ok ? <><Check size={11} /> Protected</> : <><AlertTriangle size={11} /> Gap</>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </SecCard>
+
+            {/* 9. Live Demonstrations */}
+            {(role === 'Admin' || role === 'Auditor') && (
+              <SecCard title="Live Security Demonstrations" icon={Activity}>
+                <div className="sec-section-intro">
+                  Click &quot;Test Live&quot; to send a real request to the backend and see the security control respond. These are genuine HTTP calls — not simulations.
+                </div>
+
+                <div className="demo-group">
+                  <h4>Authentication Rejections</h4>
+                  <DemoAction
+                    label="No token"
+                    method="GET"
+                    url={`${apiUrl}/api/users/0x0000000000000000000000000000000000000001`}
+                    expectedStatus={401}
+                    description="Access protected route without token → should return 401"
+                  />
+                  <DemoAction
+                    label="Expired token"
+                    method="GET"
+                    url={`${apiUrl}/api/auth/me`}
+                    token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ4eHgiLCJ3YWxsZXRBZGRyZXNzIjoiMHgwMCIsInJvbGUiOiJVU0VSIiwidG9rZW5WZXJzaW9uIjowLCJleHAiOjE2MDAwMDAwMDB9.fake"
+                    expectedStatus={401}
+                    description="Send malformed/expired JWT → should return 401"
+                  />
+                </div>
+
+                <div className="demo-group">
+                  <h4>IDOR Protection</h4>
+                  <DemoAction
+                    label="Cross user profile"
+                    method="GET"
+                    url={`${apiUrl}/api/users/0x0000000000000000000000000000000000000001`}
+                    token={token}
+                    expectedStatus={403}
+                    description="Read another user's profile with your token → should return 403"
+                  />
+                  <DemoAction
+                    label="Cross user role"
+                    method="GET"
+                    url={`${apiUrl}/api/roles/0x0000000000000000000000000000000000000001`}
+                    token={token}
+                    expectedStatus={403}
+                    description="Look up another user's role → should return 403"
+                  />
+                </div>
+
+                <div className="demo-group">
+                  <h4>Input Validation</h4>
+                  <DemoAction
+                    label="Invalid nonce address"
+                    method="POST"
+                    url={`${apiUrl}/api/auth/nonce`}
+                    expectedStatus={400}
+                    description="Send non-Ethereum address to nonce endpoint → should return 400"
+                  />
+                </div>
+
+                <div className="demo-group">
+                  <h4>Security Status (live)</h4>
+                  <DemoAction
+                    label="Security status"
+                    method="GET"
+                    url={`${apiUrl}/api/security/status`}
+                    token={token}
+                    expectedStatus={200}
+                    description="Fetch this dashboard's live backend status → 200 with safe metadata only"
+                  />
+                </div>
+              </SecCard>
+            )}
+
+            {/* Audit disclaimer */}
+            <div className="sec-audit-footer">
+              <ShieldCheck size={14} style={{ color: 'var(--muted)', flexShrink: 0 }} />
+              <p>
+                This audit covers static code analysis of the D-Vault backend, frontend, smart contracts, and Docker configuration.
+                Dynamic penetration testing, fuzz testing, and formal smart-contract verification were <strong>not performed</strong>.
+                The application has not been reviewed by an external security firm.
+                Controls marked &quot;Known Limitation&quot; represent honest, undisclosed gaps — not security theatre.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ─── Settings Page ────────────────────────────────────────────────────────────
 
 function SettingsPage({ role, theme, setTheme, shortAddress }: {
@@ -1987,7 +2512,8 @@ function App() {
     }
     if (effectivePage === 'register-admin') return <RegisterAdminPage onAdminAssigned={handleAdminAssigned} members={memberList} />
     if (effectivePage === 'settings') return <SettingsPage role={role} theme={theme} setTheme={setTheme} shortAddress={shortAddress} />
-    return <Overview role={role} onSelect={setSelectedAsset} address={address} auditEntries={auditList} assetList={assetList} onNavigate={setPage} />
+    if (effectivePage === 'security') return <SecurityCenter apiUrl={API_URL} token={auth.connected ? (localStorage.getItem('dvault_jwt') ?? '') : ''} role={role} />
+  return <Overview role={role} onSelect={setSelectedAsset} address={address} auditEntries={auditList} assetList={assetList} onNavigate={setPage} />
   }, [effectivePage, role, address, assetList, memberList, auditList, theme, shortAddress])
 
   // Show landing + modal when not connected

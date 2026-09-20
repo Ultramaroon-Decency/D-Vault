@@ -2,7 +2,7 @@ import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 import { Errors } from '../middleware/error.middleware';
-import { AuthenticatedUser, AuthToken } from '../types';
+import { AuthenticatedUser } from '../types';
 import { RoleName } from '@prisma/client';
 
 // Lazy getter to allow jest.mock('../db/prisma') in tests
@@ -10,6 +10,25 @@ import { RoleName } from '@prisma/client';
 const db = () => require('../db/prisma').prisma;
 
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
+
+// ─── SECURITY: Validate Google profile picture URL domain (VULN-24) ───────────
+const TRUSTED_PICTURE_HOSTS = [
+  'lh3.googleusercontent.com',
+  'lh4.googleusercontent.com',
+  'lh5.googleusercontent.com',
+  'lh6.googleusercontent.com',
+];
+
+function sanitizePictureUrl(picture: string | null | undefined): string | null {
+  if (!picture) return null;
+  try {
+    const url = new URL(picture);
+    if (TRUSTED_PICTURE_HOSTS.includes(url.hostname)) return picture;
+    return null; // Reject untrusted picture domains
+  } catch {
+    return null;
+  }
+}
 
 // ─── Email → Role resolution ──────────────────────────────────────────────────
 
@@ -45,6 +64,7 @@ export interface GoogleAuthResult {
 
 /**
  * Verifies a Google ID token from the frontend and returns a platform JWT.
+ * SECURITY: tokenVersion included in JWT payload for revocation support. (VULN-03)
  *
  * Flow:
  *   1. Frontend calls Google Sign-In → receives idToken (credential)
@@ -52,7 +72,7 @@ export interface GoogleAuthResult {
  *   3. We verify the token with Google's public keys
  *   4. We upsert the User record (email, googleId, displayName)
  *   5. We auto-assign role from email whitelist on first login
- *   6. We issue our own JWT
+ *   6. We issue our own JWT with tokenVersion
  */
 export const verifyGoogleTokenAndLogin = async (idToken: string): Promise<GoogleAuthResult> => {
   // 1. Verify with Google
@@ -71,7 +91,10 @@ export const verifyGoogleTokenAndLogin = async (idToken: string): Promise<Google
     throw Errors.unauthorized('Google token missing required claims (sub, email).');
   }
 
-  const { sub: googleId, email, name = null, picture = null } = payload;
+  const { sub: googleId, email, name = null, picture: rawPicture = null } = payload;
+
+  // SECURITY: Validate picture URL to trusted Google domains only (VULN-24)
+  const picture = sanitizePictureUrl(rawPicture);
 
   // 2. Check if user already exists (by googleId or email)
   const existing = await db().user.findFirst({
@@ -82,10 +105,10 @@ export const verifyGoogleTokenAndLogin = async (idToken: string): Promise<Google
   const isNewUser = !existing;
   const desiredRole = resolveRoleForEmail(email);
 
-  let user: { id: string; email: string | null; displayName: string | null; walletAddress: string | null; did: string | null };
+  let user: { id: string; email: string | null; displayName: string | null; walletAddress: string | null; did: string | null; tokenVersion: number };
 
   if (existing) {
-    // 3a. Update existing record (keep wallet address if present)
+    // 3a. Update existing record — SECURITY: increment tokenVersion on login (VULN-03)
     user = await db().user.update({
       where: { id: existing.id },
       data: {
@@ -94,6 +117,7 @@ export const verifyGoogleTokenAndLogin = async (idToken: string): Promise<Google
         displayName: existing.displayName ?? name,
         authProvider: existing.walletAddress ? 'both' : 'google',
         updatedAt: new Date(),
+        tokenVersion: { increment: 1 },
       },
     });
   } else {
@@ -131,13 +155,14 @@ export const verifyGoogleTokenAndLogin = async (idToken: string): Promise<Google
   const resolvedRole: RoleName =
     ROLE_PRIORITY.find((r) => userRoleNames.includes(r)) ?? 'USER';
 
-  // 5. Issue platform JWT
+  // 5. Issue platform JWT — SECURITY: includes tokenVersion (VULN-03)
   const jwtPayload: AuthenticatedUser = {
     userId: user.id,
     walletAddress: user.walletAddress ?? `google:${googleId}`,
     did: user.did,
     role: resolvedRole,
     email: email.toLowerCase(),
+    tokenVersion: user.tokenVersion,
   };
 
   const token = jwt.sign(jwtPayload, env.JWT_SECRET, {

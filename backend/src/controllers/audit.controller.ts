@@ -1,5 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../db/prisma';
+import { Errors } from '../middleware/error.middleware';
+
+// SECURITY: Allowlist for eventType filter (VULN-20)
+// Prevents blind probing of internal event type strings
+const VALID_EVENT_TYPES = ['DIDCreated', 'RoleAssigned', 'NFTMinted', 'Transfer', 'PermissionUpdated', 'AuthFailure', 'AuthorizationFailure'];
 
 // =============================================
 // GET /api/audit — AUDITOR or ADMIN
@@ -10,6 +15,11 @@ export const getAuditLog = async (req: Request, res: Response, next: NextFunctio
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const eventType = req.query.eventType as string | undefined;
     const actorAddress = req.query.actorAddress as string | undefined;
+
+    // SECURITY: Validate eventType against allowlist (VULN-20)
+    if (eventType && !VALID_EVENT_TYPES.includes(eventType)) {
+      throw Errors.badRequest(`Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(', ')}`);
+    }
 
     const where = {
       ...(eventType && { eventType }),

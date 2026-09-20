@@ -9,6 +9,8 @@ export interface AuthenticatedUser {
   did: string | null;
   role: RoleName;
   email?: string; // present for Google-authenticated users
+  // SECURITY: tokenVersion enables per-user JWT revocation (VULN-03)
+  tokenVersion: number;
 }
 
 // =============================================

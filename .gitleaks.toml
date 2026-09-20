@@ -1,0 +1,46 @@
+# =============================================
+# Gitleaks Configuration — D-Vault
+# Prevents accidental commit of secrets
+# =============================================
+
+title = "D-Vault Secret Scanner"
+
+[extend]
+useDefault = true
+
+[[rules]]
+description = "Ethereum Private Key"
+id = "ethereum-private-key"
+regex = '''(?i)(deployer_private_key|private_key)\s*=\s*[0-9a-fA-F]{64}'''
+tags = ["key", "ethereum", "blockchain"]
+
+[[rules]]
+description = "JWT Secret — known weak placeholder"
+id = "weak-jwt-secret"
+regex = '''JWT_SECRET\s*=\s*(your-super-secret|change-in-production|dev.*secret|test.*secret)'''
+tags = ["jwt", "secret"]
+
+[[rules]]
+description = "Database password — plaintext"
+id = "db-password-plaintext"
+regex = '''(DATABASE_URL|POSTGRES_PASSWORD)\s*=\s*[^$\{\n]{0,}password[^$\{\n]{0,}'''
+tags = ["database", "password"]
+
+[[rules]]
+description = "Pinata JWT"
+id = "pinata-jwt"
+regex = '''PINATA_JWT\s*=\s*(ey[a-zA-Z0-9._-]{20,})'''
+tags = ["jwt", "ipfs", "pinata"]
+
+[allowlist]
+description = "Ignore placeholder values and example files"
+paths = [
+  '''.env.example''',
+  '''\.env\.example$''',
+]
+regexes = [
+  '''your-deployer-wallet-private-key''',
+  '''your-pinata-jwt-token''',
+  '''your-google-client''',
+  '''YOUR_INFURA_KEY''',
+]

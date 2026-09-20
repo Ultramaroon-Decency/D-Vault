@@ -1,12 +1,11 @@
 # ==============================================================================
 # D-Vault Local Development Environment (Docker Compose)
 #
-# NOTE ON SMART CONTRACTS:
-# The `contracts/` directory (Hardhat blockchain development environment) is not
-# containerized yet because the Blockchain Engineer's code has not been integrated
-# into this repository. A commented-out placeholder service for a local Hardhat node
-# (port 8545) is provided at the bottom of this file. Uncomment and activate it
-# once the `contracts/` directory is merged.
+# SECURITY CHANGES:
+#  - PostgreSQL password moved to POSTGRES_PASSWORD env var (VULN-10)
+#  - PostgreSQL host port mapping removed — DB only accessible via internal network (VULN-11)
+#  - Redis service added for shared rate-limiter state
+#  - Backend container runs as non-root via Dockerfile USER directive (VULN-12)
 # ==============================================================================
 
 version: '3.8'
@@ -14,16 +13,19 @@ version: '3.8'
 services:
   # ----------------------------------------------------------------------------
   # 1. PostgreSQL Database Service
+  # SECURITY: Port NOT exposed to host — only reachable via d-vault-network (VULN-11)
+  # SECURITY: Password injected from env var, not hardcoded (VULN-10)
   # ----------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: d-vault-postgres
     restart: unless-stopped
-    ports:
-      - "5432:5432"
+    # SECURITY: No host port mapping — DB only accessible within Docker network
+    # ports:
+    #   - "5432:5432"   ← removed to prevent direct DB access from host
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in your .env or shell environment}
       POSTGRES_DB: sih_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -36,7 +38,19 @@ services:
       - d-vault-network
 
   # ----------------------------------------------------------------------------
-  # 2. Backend API Service (Express + Prisma + TypeScript)
+  # 2. Redis (shared rate-limiter store — prevents bypass via multi-instance scaling)
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: d-vault-redis
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly no
+    networks:
+      - d-vault-network
+
+  # ----------------------------------------------------------------------------
+  # 3. Backend API Service (Express + Prisma + TypeScript)
+  # SECURITY: Runs as non-root user (set in Dockerfile) (VULN-12)
   # ----------------------------------------------------------------------------
   backend:
     build:
@@ -49,19 +63,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     env_file:
       - path: ./backend/.env
         required: false
     environment:
       NODE_ENV: production
       PORT: 5000
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/sih_db?schema=public
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/sih_db?schema=public
       CORS_ORIGIN: http://localhost:3000
+      REDIS_URL: redis://redis:6379
     networks:
       - d-vault-network
 
   # ----------------------------------------------------------------------------
-  # 3. Frontend Service (Next.js 16 + Tailwind)
+  # 4. Frontend Service (Next.js + Tailwind)
   # ----------------------------------------------------------------------------
   frontend:
     build:
@@ -84,7 +101,7 @@ services:
       - d-vault-network
 
   # ----------------------------------------------------------------------------
-  # 4. Smart Contracts (Local Hardhat Node)
+  # 5. Smart Contracts (Local Hardhat Node)
   # ----------------------------------------------------------------------------
   hardhat:
     build:

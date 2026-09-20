@@ -62,7 +62,9 @@ describe("DIDRegistry", function () {
       expect(did).to.equal(DID_1);
       expect(controller).to.equal(user1.address);
       expect(createdAtBlock).to.equal(blockNumber);
-      expect(verified).to.equal(true);
+      // SECURITY FIX (VULN-07): verified is false by default after registration.
+      // Admin must call setVerified(address, true) to verify after a real identity check.
+      expect(verified).to.equal(false);
     });
 
     it("should revert for unregistered address", async function () {

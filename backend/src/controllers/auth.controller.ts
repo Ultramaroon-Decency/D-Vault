@@ -68,3 +68,17 @@ export const getMe = async (req: Request, res: Response, next: NextFunction) => 
     next(err);
   }
 };
+
+// =============================================
+// POST /api/auth/logout
+// SECURITY: Revokes all existing JWTs for this user by incrementing tokenVersion (VULN-03)
+// =============================================
+export const logout = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) throw Errors.unauthorized();
+    await authService.logoutUser(req.user.userId);
+    res.status(200).json({ success: true, data: { message: 'Logged out successfully. All tokens invalidated.' } });
+  } catch (err) {
+    next(err);
+  }
+};
