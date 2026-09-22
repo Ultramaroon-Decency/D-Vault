@@ -46,6 +46,7 @@ const envSchema = z.object({
 
   // Email-based role whitelists (comma-separated)
   ADMIN_EMAILS: z.string().default(''),
+  PRIMARY_ADMIN_EMAIL: z.string().default(''),
   MANAGER_EMAILS: z.string().default(''),
 });
 

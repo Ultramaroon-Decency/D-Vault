@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowUpRight, BadgeCheck, BarChart3, Bell, BookOpen, Check, ChevronDown, CircleHelp, Copy, FileText, Fingerprint, GitBranch, Globe2, KeyRound, LayoutDashboard, Loader2, Menu, Network, Plus, Search, Settings2, ShieldCheck, Sparkles, Upload, UserPlus, UserRound, Users, Wallet, X, Zap } from 'lucide-react'
+import { Activity, ArrowUpRight, BadgeCheck, BarChart3, Bell, BookOpen, Check, ChevronDown, CircleHelp, Copy, FileText, Fingerprint, GitBranch, Globe2, KeyRound, LayoutDashboard, Loader2, LogOut, Menu, Network, Plus, Search, Settings2, ShieldCheck, Sparkles, Upload, UserPlus, UserRound, Users, Wallet, X, Zap } from 'lucide-react'
 import {
   initialAssets,
   initialAuditEntries,
@@ -27,8 +27,8 @@ const nav = [
   { id: 'assets',         label: 'Asset registry',    icon: GitBranch,       roles: ['Admin', 'Manager', 'Auditor', 'User'] },
   { id: 'mint',           label: 'Mint asset',        icon: Plus,            roles: ['Admin', 'Manager'] },
   { id: 'roles',          label: 'Role control',      icon: Users,           roles: ['Admin'] },
-  { id: 'register-admin', label: 'Register admin',    icon: ShieldCheck,     roles: ['Admin'] },
-  { id: 'audit',          label: 'Audit ledger',      icon: BookOpen,        roles: ['Admin', 'Auditor', 'User'] },
+  { id: 'register-admin', label: 'Register Role',     icon: ShieldCheck,     roles: ['Admin'] },
+  { id: 'audit',          label: 'Audit ledger',      icon: BookOpen,        roles: ['Admin', 'Manager', 'Auditor', 'User'] },
 ]
 
 // ─── Small reusable components ────────────────────────────────────────────────
@@ -93,16 +93,45 @@ function useAuth() {
     setError(null)
     setConnecting(true)
     try {
-      const eth = (window as { ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> } }).ethereum
+      const anyWin = typeof window !== 'undefined' ? (window as unknown as { ethereum?: { isMetaMask?: boolean; providers?: Array<{ isMetaMask?: boolean; request: (args: { method: string; params?: unknown[] }) => Promise<unknown> }>; request: (args: { method: string; params?: unknown[] }) => Promise<unknown> } }) : undefined
+      let eth = anyWin?.ethereum
+      if (eth?.providers?.length) {
+        eth = eth.providers.find(p => p.isMetaMask) ?? eth.providers[0]
+      }
       if (!eth) {
         setError('MetaMask not detected. Please install the MetaMask extension.')
         setConnecting(false)
         return
       }
-      await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: SEPOLIA_CHAIN_ID }] }).catch(() => {})
+
+      // Request accounts first
       const accounts = await eth.request({ method: 'eth_requestAccounts' }) as string[]
+      if (!accounts || !accounts.length || !accounts[0]) {
+        setError('No account selected in MetaMask. Please unlock or select an account.')
+        setConnecting(false)
+        return
+      }
       const address = accounts[0]
       const shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`
+
+      // Attempt network switch non-blockingly
+      try {
+        await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: SEPOLIA_CHAIN_ID }] })
+      } catch (switchErr: unknown) {
+        const errObj = switchErr as { code?: number }
+        if (errObj?.code === 4902) {
+          await eth.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: SEPOLIA_CHAIN_ID,
+              chainName: 'Sepolia test network',
+              nativeCurrency: { name: 'SepoliaETH', symbol: 'SEP', decimals: 18 },
+              rpcUrls: ['https://rpc.sepolia.org'],
+              blockExplorerUrls: ['https://sepolia.etherscan.io'],
+            }],
+          }).catch(() => {})
+        }
+      }
 
       // ── Backend auth: nonce → sign → verify → JWT ──────────────────────────
       try {
@@ -111,43 +140,51 @@ function useAuth() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ walletAddress: address }),
         })
-        const nonceJson = await nonceRes.json()
-        // Backend returns { success, data: { message } }
-        const message = nonceJson.data?.message ?? nonceJson.message
-        if (!message) throw new Error('Failed to get nonce from backend')
-        // MetaMask requires hex-encoded message for personal_sign to avoid origin errors
-        const hexMsg = '0x' + Array.from(new TextEncoder().encode(message as string)).map(b => b.toString(16).padStart(2, '0')).join('')
-        const signature = await eth.request({ method: 'personal_sign', params: [hexMsg, address] }) as string
-        const verifyRes = await fetch(`${API_URL}/api/auth/verify`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress: address, signature }),
-        })
-        const verifyJson = await verifyRes.json()
-        // Backend returns { success, data: { token, expiresIn } } — no user object
-        const token = verifyJson.data?.token ?? verifyJson.token
-        if (token) {
-          if (typeof window !== 'undefined') localStorage.setItem('dvault_jwt', token)
-          // Decode role from JWT payload (wallet verify doesn't return a user object)
-          let role = 'User'
-          try {
-            const jwtPayload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-            const roleMap: Record<string, string> = { ADMIN: 'Admin', MANAGER: 'Manager', AUDITOR: 'Auditor', USER: 'User' }
-            role = roleMap[jwtPayload.role as string] ?? 'User'
-          } catch { /* fallback to User */ }
-          setAuth({ connected: true, address, shortAddress, authMethod: 'wallet', role })
-          setShowModal(false)
+        if (nonceRes.ok) {
+          const nonceJson = await nonceRes.json()
+          const message = nonceJson.data?.message ?? nonceJson.message
+          if (message) {
+            const hexMsg = '0x' + Array.from(new TextEncoder().encode(message as string)).map(b => b.toString(16).padStart(2, '0')).join('')
+            const signature = await eth.request({ method: 'personal_sign', params: [hexMsg, address] }) as string
+            const verifyRes = await fetch(`${API_URL}/api/auth/verify`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ walletAddress: address, signature }),
+            })
+            if (verifyRes.ok) {
+              const verifyJson = await verifyRes.json()
+              const token = verifyJson.data?.token ?? verifyJson.token
+              if (token) {
+                if (typeof window !== 'undefined') localStorage.setItem('dvault_jwt', token)
+                let role = 'User'
+                try {
+                  const jwtPayload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+                  const roleMap: Record<string, string> = { ADMIN: 'Admin', MANAGER: 'Manager', AUDITOR: 'Auditor', USER: 'User' }
+                  role = roleMap[jwtPayload.role as string] ?? 'User'
+                } catch { /* fallback to User */ }
+                setAuth({ connected: true, address, shortAddress, authMethod: 'wallet', role })
+                setShowModal(false)
+                return
+              }
+            }
+          }
+        }
+      } catch (signErr: unknown) {
+        const msg = signErr instanceof Error ? signErr.message : String(signErr)
+        if (msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied') || msg.toLowerCase().includes('cancel')) {
+          setError('Signature request was rejected in MetaMask.')
+          setConnecting(false)
           return
         }
-      } catch {
-        // Backend auth failed — still allow wallet with USER role
       }
+
+      // Backend auth offline/failed — allow wallet with USER role in client web3 mode
       setAuth({ connected: true, address, shortAddress, authMethod: 'wallet', role: 'User' })
       setShowModal(false)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Connection failed'
       if (msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('denied')) {
-        setError('You rejected the connection request.')
+        setError('You rejected the connection request in MetaMask.')
       } else {
         setError(msg)
       }
@@ -210,6 +247,28 @@ function useAuth() {
     setError(null)
   }, [])
 
+  useEffect(() => {
+    const anyWin = typeof window !== 'undefined' ? (window as unknown as { ethereum?: { on?: (event: string, handler: (args: unknown) => void) => void; removeListener?: (event: string, handler: (args: unknown) => void) => void } }) : undefined
+    const eth = anyWin?.ethereum
+    if (!eth?.on) return
+
+    const handleAccountsChanged = (accounts: unknown) => {
+      const accs = accounts as string[]
+      if (!accs || !accs.length) {
+        disconnect()
+      } else if (auth.connected && auth.authMethod === 'wallet' && accs[0].toLowerCase() !== auth.address.toLowerCase()) {
+        const address = accs[0]
+        const shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`
+        setAuth(prev => prev.connected ? { ...prev, address, shortAddress } : prev)
+      }
+    }
+
+    eth.on('accountsChanged', handleAccountsChanged)
+    return () => {
+      eth.removeListener?.('accountsChanged', handleAccountsChanged)
+    }
+  }, [auth, disconnect])
+
   return { auth, connecting, error, showModal, setShowModal, connectWallet, handleGoogleCredential, connectAsRegisteredUser, disconnect }
 }
 
@@ -252,6 +311,10 @@ function AuthModal({
   const [registering, setRegistering] = useState(false)
   const [registeredDID, setRegisteredDID] = useState<string | null>(null)
 
+  useEffect(() => {
+    setTab(initialTab)
+  }, [initialTab])
+
   const googleBtnRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || !GOOGLE_CLIENT_ID) return
     if (!document.getElementById('gsi-script')) {
@@ -276,7 +339,7 @@ function AuthModal({
     window.google?.accounts.id.renderButton(container, {
       theme: 'filled_black',
       size: 'medium',
-      width: 400,
+      width: 300,
       text: 'continue_with',
       shape: 'rectangular',
     })
@@ -293,130 +356,188 @@ function AuthModal({
     onSelfRegister(regAddress, regName)
   }
 
+  const isRegister = tab === 'register'
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="auth-modal" role="dialog" aria-modal="true" aria-label="Sign in" onClick={e => e.stopPropagation()}>
-        <div className="auth-modal-head">
-          <div className="brand"><Logo /><span>Data<span className="brand-dot">.</span>Vault</span></div>
-          <button className="icon-button" onClick={onClose} aria-label="Close"><X size={17} /></button>
-        </div>
+      <div
+        className={`auth-slider-container ${isRegister ? 'active' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Sign in"
+        onClick={e => e.stopPropagation()}
+      >
+        <button className="icon-button auth-slider-close" onClick={onClose} aria-label="Close">
+          <X size={17} />
+        </button>
 
-        {/* Tab Switcher */}
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '18px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>
-          <button
-            className={`text-button ${tab === 'login' ? 'crumb-active' : ''}`}
-            style={{ fontWeight: tab === 'login' ? 700 : 400, color: tab === 'login' ? 'var(--mint)' : 'var(--muted)', fontSize: '12px' }}
-            onClick={() => setTab('login')}
-          >
-            Sign In
-          </button>
-          <span style={{ color: 'var(--line)' }}>|</span>
-          <button
-            className={`text-button ${tab === 'register' ? 'crumb-active' : ''}`}
-            style={{ fontWeight: tab === 'register' ? 700 : 400, color: tab === 'register' ? 'var(--mint)' : 'var(--muted)', fontSize: '12px' }}
-            onClick={() => setTab('register')}
-          >
-            Create New Sovereign Identity
-          </button>
-        </div>
+        {/* ── Sign In Form Container ── */}
+        <div className="auth-slider-form-container sign-in">
+          <div className="auth-modal-head">
+            <div className="brand"><Logo /><span>Data<span className="brand-dot">.</span>Vault</span></div>
+          </div>
 
-        {tab === 'login' ? (
-          <>
-            <h2 className="auth-title">Sign in to continue</h2>
-            <p className="auth-subtitle muted-copy">Choose how you want to access your sovereign identity.</p>
+          <h2 className="auth-title">Sign in to continue</h2>
+          <p className="auth-subtitle muted-copy">Choose how you want to access your sovereign identity.</p>
 
-            {error && (
-              <div className="wallet-error">
-                <X size={13} />
-                {error === 'Failed to fetch'
-                  ? 'Cannot reach backend server. Make sure it is running on port 5000.'
-                  : error}
-              </div>
+          {error && (
+            <div className="wallet-error">
+              <X size={13} />
+              {error === 'Failed to fetch'
+                ? 'Cannot reach backend server. Make sure it is running on port 5000.'
+                : error}
+            </div>
+          )}
+
+          {/* ── MetaMask row ── */}
+          <div className="auth-option">
+            <div className="auth-option-icon"><Wallet size={20} /></div>
+            <div className="auth-option-text">
+              <strong>Connect wallet</strong>
+              <span>MetaMask or any injected Ethereum wallet</span>
+            </div>
+            <button className="button button-primary button-small" onClick={onWallet} disabled={connecting}>
+              {connecting ? <Loader2 size={13} className="spin" /> : <Wallet size={13} />}
+              {connecting ? 'Opening…' : 'Connect'}
+            </button>
+          </div>
+
+          <div className="auth-divider"><span>or</span></div>
+
+          {/* ── Google section ── */}
+          <div className="auth-google-section">
+            <div className="auth-google-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              <span>Continue with Google</span>
+              <span className="auth-google-note">Admins granted automatically</span>
+            </div>
+            {GOOGLE_CLIENT_ID ? (
+              <div ref={googleBtnRef} className="google-btn-wrapper" />
+            ) : (
+              <div className="auth-no-google"><ShieldCheck size={13} /> Google Client ID not configured in .env.local</div>
             )}
+          </div>
 
-            {/* ── MetaMask row ── */}
-            <div className="auth-option">
-              <div className="auth-option-icon"><Wallet size={20} /></div>
-              <div className="auth-option-text">
-                <strong>Connect wallet</strong>
-                <span>MetaMask or any injected Ethereum wallet</span>
+          <p className="auth-footnote">
+            <ShieldCheck size={12} /> No custody of your keys &nbsp;·&nbsp; <Globe2 size={12} /> Open protocol
+          </p>
+
+          <div className="auth-slider-mobile-toggle">
+            <span>New to DataVault?</span>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setTab('register')}
+            >
+              Create New Sovereign Identity →
+            </button>
+          </div>
+        </div>
+
+        {/* ── Register Form Container ── */}
+        <div className="auth-slider-form-container sign-up">
+          <div className="auth-modal-head">
+            <div className="brand"><Logo /><span>Data<span className="brand-dot">.</span>Vault</span></div>
+          </div>
+
+          <h2 className="auth-title">User Self-Registration</h2>
+          <p className="auth-subtitle muted-copy">Register your wallet address to create a self-sovereign DID on Sepolia.</p>
+
+          <form onSubmit={handleRegisterSubmit}>
+            <label className="field-label" style={{ marginTop: '10px' }}>Your Wallet Address</label>
+            <div className="input-wrap">
+              <Wallet size={16} />
+              <input
+                placeholder="0x71C7... or your address"
+                value={regAddress}
+                onChange={e => setRegAddress(e.target.value)}
+                required
+              />
+            </div>
+
+            <label className="field-label" style={{ marginTop: '14px' }}>Display Name / Pseudonym</label>
+            <div className="input-wrap">
+              <UserRound size={16} />
+              <input
+                placeholder="e.g. Satoshi Operator"
+                value={regName}
+                onChange={e => setRegName(e.target.value)}
+              />
+            </div>
+
+            <div className="signature-note" style={{ marginTop: '14px' }}>
+              <ShieldCheck size={16} />
+              <div>
+                <strong>Self-Sovereign Identity</strong>
+                <span>Links your wallet to DIDRegistry on Sepolia without central intermediaries.</span>
               </div>
-              <button className="button button-primary button-small" onClick={onWallet} disabled={connecting}>
-                {connecting ? <Loader2 size={13} className="spin" /> : <Wallet size={13} />}
-                {connecting ? 'Opening…' : 'Connect'}
+            </div>
+
+            <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button type="button" className="button button-outline" onClick={() => setTab('login')}>Cancel</button>
+              <button type="submit" className="button button-primary" disabled={!regAddress || registering}>
+                {registering ? <Loader2 size={13} className="spin" /> : <UserPlus size={13} />}
+                {registering ? 'Creating DID on-chain…' : 'Register Identity & Enter'}
               </button>
             </div>
+          </form>
 
-            <div className="auth-divider"><span>or</span></div>
+          <p className="auth-footnote">
+            <ShieldCheck size={12} /> No custody of your keys &nbsp;·&nbsp; <Globe2 size={12} /> Open protocol
+          </p>
 
-            {/* ── Google section ── */}
-            <div className="auth-google-section">
-              <div className="auth-google-label">
-                <svg width="16" height="16" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                </svg>
-                <span>Continue with Google</span>
-                <span className="auth-google-note">Admins granted automatically</span>
-              </div>
-              {GOOGLE_CLIENT_ID ? (
-                <div ref={googleBtnRef} className="google-btn-wrapper" />
-              ) : (
-                <div className="auth-no-google"><ShieldCheck size={13} /> Google Client ID not configured in .env.local</div>
-              )}
-            </div>
-          </>
-        ) : (
-          <div>
-            <h2 className="auth-title">User Self-Registration</h2>
-            <p className="auth-subtitle muted-copy">Register your wallet address to create a self-sovereign DID on Sepolia.</p>
-
-            <form onSubmit={handleRegisterSubmit}>
-              <label className="field-label" style={{ marginTop: '10px' }}>Your Wallet Address</label>
-              <div className="input-wrap">
-                <Wallet size={16} />
-                <input
-                  placeholder="0x71C7... or your address"
-                  value={regAddress}
-                  onChange={e => setRegAddress(e.target.value)}
-                  required
-                />
-              </div>
-
-              <label className="field-label" style={{ marginTop: '14px' }}>Display Name / Pseudonym</label>
-              <div className="input-wrap">
-                <UserRound size={16} />
-                <input
-                  placeholder="e.g. Satoshi Operator"
-                  value={regName}
-                  onChange={e => setRegName(e.target.value)}
-                />
-              </div>
-
-              <div className="signature-note" style={{ marginTop: '14px' }}>
-                <ShieldCheck size={16} />
-                <div>
-                  <strong>Self-Sovereign Identity</strong>
-                  <span>Links your wallet to DIDRegistry on Sepolia without central intermediaries.</span>
-                </div>
-              </div>
-
-              <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                <button type="button" className="button button-outline" onClick={() => setTab('login')}>Cancel</button>
-                <button type="submit" className="button button-primary" disabled={!regAddress || registering}>
-                  {registering ? <Loader2 size={13} className="spin" /> : <UserPlus size={13} />}
-                  {registering ? 'Creating DID on-chain…' : 'Register Identity & Enter'}
-                </button>
-              </div>
-            </form>
+          <div className="auth-slider-mobile-toggle">
+            <span>Already registered?</span>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setTab('login')}
+            >
+              Sign In →
+            </button>
           </div>
-        )}
+        </div>
 
-        <p className="auth-footnote">
-          <ShieldCheck size={12} /> No custody of your keys &nbsp;·&nbsp; <Globe2 size={12} /> Open protocol
-        </p>
+        {/* ── Sliding Toggle Container (Adapted from Demo) ── */}
+        <div className="auth-slider-toggle-container">
+          <div className="auth-slider-toggle">
+            <div className="auth-slider-toggle-panel auth-slider-toggle-left">
+              <div className="brand" style={{ marginBottom: '14px' }}>
+                <Logo />
+                <span>Data<span className="brand-dot">.</span>Vault</span>
+              </div>
+              <h2>Welcome Back</h2>
+              <p>Sign in to access your sovereign credentials, assets, and permissions.</p>
+              <button
+                type="button"
+                className="auth-slider-btn-hidden"
+                onClick={() => setTab('login')}
+              >
+                Sign In
+              </button>
+            </div>
+            <div className="auth-slider-toggle-panel auth-slider-toggle-right">
+              <div className="brand" style={{ marginBottom: '14px' }}>
+                <Logo />
+                <span>Data<span className="brand-dot">.</span>Vault</span>
+              </div>
+              <h2>Create Identity</h2>
+              <p>Register your wallet address to mint a self-sovereign DID on Sepolia.</p>
+              <button
+                type="button"
+                className="auth-slider-btn-hidden"
+                onClick={() => setTab('register')}
+              >
+                Register Identity
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -663,7 +784,7 @@ function Landing({
 
 // ─── Role Switcher Component ──────────────────────────────────────────────────
 
-function RoleSwitcher({ role, setRole }: { role: Role; setRole: (role: Role) => void }) {
+function RoleSwitcher({ role, setRole, authRole }: { role: Role; setRole: (role: Role) => void; authRole: Role }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -677,7 +798,8 @@ function RoleSwitcher({ role, setRole }: { role: Role; setRole: (role: Role) => 
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const roles: Role[] = ['Admin', 'Manager', 'Auditor', 'User']
+  // Admin can view as any role; all other users are locked to their own assigned role
+  const roles: Role[] = authRole === 'Admin' ? ['Admin', 'Manager', 'Auditor', 'User'] : [authRole]
 
   return (
     <div className="role-switcher" ref={ref}>
@@ -720,22 +842,121 @@ function RoleSwitcher({ role, setRole }: { role: Role; setRole: (role: Role) => 
   )
 }
 
+// ─── Notification Popover Component ───────────────────────────────────────────
+
+function NotificationPopover({
+  auditEntries,
+  onNavigate,
+}: {
+  auditEntries: AuditEntry[]
+  onNavigate: (page: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const recentEntries = auditEntries.slice(0, 4)
+
+  return (
+    <div className="notification-wrapper" ref={ref}>
+      <button
+        type="button"
+        className="notification-button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        aria-label="Notifications"
+        title="Recent activity notifications"
+      >
+        <Bell size={17} />
+        <span />
+      </button>
+
+      {open && (
+        <div className="notification-popover" role="dialog" aria-label="Notifications">
+          <div className="notification-popover-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Bell size={13} style={{ color: 'var(--mint)' }} />
+              <strong>Recent Activity</strong>
+            </div>
+            <span className="notification-count">{auditEntries.length} events</span>
+          </div>
+
+          <div className="notification-popover-list">
+            {recentEntries.length === 0 ? (
+              <div className="notification-empty">No recent activity</div>
+            ) : (
+              recentEntries.map((entry, index) => (
+                <div className="notification-item" key={entry.hash + index}>
+                  <div className={`event-icon event-${entry.tone}`} style={{ width: '24px', height: '24px', flexShrink: 0 }}>
+                    <Activity size={12} />
+                  </div>
+                  <div className="notification-item-content">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+                      <strong className="notification-item-type">{entry.type}</strong>
+                      <span className="notification-item-time">{entry.time}</span>
+                    </div>
+                    <span className="notification-item-target">{entry.target}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="notification-popover-footer">
+            <button
+              type="button"
+              className="notification-view-all-btn"
+              onClick={() => {
+                setOpen(false)
+                onNavigate('audit')
+              }}
+            >
+              <span>View Full Audit Ledger</span>
+              <ArrowUpRight size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Topbar ───────────────────────────────────────────────────────────────────
 
-function Topbar({ role, setRole, onMenu, theme, setTheme, shortAddress, onDisconnect }: {
-  role: Role; setRole: (role: Role) => void; onMenu: () => void
+function Topbar({ role, setRole, authRole, onMenu, theme, setTheme, shortAddress, onNavigate, auditEntries, onSignOut }: {
+  role: Role; setRole: (role: Role) => void; authRole: Role; onMenu: () => void
   theme: 'dark' | 'light'; setTheme: (theme: 'dark' | 'light') => void
-  shortAddress: string; onDisconnect: () => void
+  shortAddress: string; onNavigate: (page: string) => void
+  auditEntries: AuditEntry[]
+  onSignOut: () => void
 }) {
   return (
     <header className="topbar">
       <button className="mobile-menu" onClick={onMenu} aria-label="Open navigation"><Menu size={20} /></button>
       <div className="crumb"><span className="crumb-active">Console</span><span>/</span><span>{roleMeta[role].description}</span></div>
       <div className="top-actions">
-        <RoleSwitcher role={role} setRole={setRole} />
+        <RoleSwitcher role={role} setRole={setRole} authRole={authRole} />
         <button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Toggle theme">{theme === 'dark' ? '◐' : '◑'}</button>
-        <button className="notification-button" aria-label="Notifications"><Bell size={17} /><span /></button>
-        <button className="avatar" title={`Connected: ${shortAddress}\nClick to disconnect`} onClick={onDisconnect}>{shortAddress.slice(0, 2).toUpperCase()}</button>
+        <NotificationPopover auditEntries={auditEntries} onNavigate={onNavigate} />
+        <button className="avatar" title={`Profile: ${shortAddress}`} onClick={() => onNavigate('profile')} aria-label="View profile">{shortAddress.slice(0, 2).toUpperCase()}</button>
+        <button
+          type="button"
+          className="sign-out-button"
+          onClick={onSignOut}
+          title="Sign out"
+          aria-label="Sign out"
+        >
+          <LogOut size={15} />
+        </button>
       </div>
     </header>
   )
@@ -746,6 +967,8 @@ function Topbar({ role, setRole, onMenu, theme, setTheme, shortAddress, onDiscon
 function Sidebar({ role, page, setPage, open, onClose, shortAddress }: {
   role: Role; page: string; setPage: (page: string) => void; open: boolean; onClose: () => void; shortAddress: string
 }) {
+  const [navCollapsed, setNavCollapsed] = useState(false)
+
   return (
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
       <div className="sidebar-brand">
@@ -754,20 +977,32 @@ function Sidebar({ role, page, setPage, open, onClose, shortAddress }: {
       </div>
       <div className="workspace">
         <span className="workspace-label">Workspace</span>
-        <div className="workspace-row"><div className="workspace-icon">A</div><div><strong>Aegis Protocol</strong><span>Core network</span></div><ChevronDown size={14} /></div>
+        <button
+          type="button"
+          className="workspace-row workspace-toggle"
+          onClick={() => setNavCollapsed((prev) => !prev)}
+          aria-expanded={!navCollapsed}
+          aria-label="Toggle navigation"
+        >
+          <div className="workspace-icon">A</div>
+          <div><strong>Aegis Protocol</strong><span>Core network</span></div>
+          <ChevronDown size={14} className={`workspace-chevron ${navCollapsed ? 'is-collapsed' : ''}`} />
+        </button>
       </div>
-      <nav className="nav-list">
-        {nav.filter((item) => item.roles.includes(role)).map((item) => (
-          <button
-            className={`nav-item ${page === item.id ? 'active' : ''}`}
-            onClick={() => { setPage(item.id); onClose() }}
-            key={item.id}
-          >
-            <item.icon size={17} /><span>{item.label}</span>
-            {item.id === 'audit' && <i className="nav-count">186K</i>}
-          </button>
-        ))}
-      </nav>
+      <div className={`nav-collapse-wrapper ${navCollapsed ? 'is-collapsed' : ''}`}>
+        <nav className="nav-list">
+          {nav.filter((item) => item.roles.includes(role)).map((item) => (
+            <button
+              className={`nav-item ${page === item.id ? 'active' : ''}`}
+              onClick={() => { setPage(item.id); onClose() }}
+              key={item.id}
+            >
+              <item.icon size={17} /><span>{item.label}</span>
+              {item.id === 'audit' && <i className="nav-count">186K</i>}
+            </button>
+          ))}
+        </nav>
+      </div>
       <div className="sidebar-bottom">
         <div className="network-card">
           <span className="network-dot" />
@@ -1107,7 +1342,7 @@ function Overview({
         assets: 'Browse the full asset registry and manage owned assets',
         mint: 'Create and issue new on-chain assets',
         roles: 'Manage user roles and access permissions',
-        'register-admin': 'Register a new admin operator on-chain',
+        'register-admin': 'Register a new role operator on-chain',
         audit: 'Inspect the immutable audit trail and verify proofs',
       }
       return { ...item, description: descriptions[item.id] || '' }
@@ -1679,7 +1914,7 @@ function RegisterAdminPage({ onAdminAssigned, members }: { onAdminAssigned: (add
 
   return (
     <div className="page-content">
-      <SectionHeading eyebrow="Governance / Privileged access" title="Register admin" />
+      <SectionHeading eyebrow="Governance / Privileged access" title="Register Role" />
       <div className="danger-banner">
         <CircleHelp size={18} />
         <div><strong>This is an on-chain governance action</strong><span>Role assignments are recorded permanently on the blockchain and broadcast to the audit ledger. Only perform this if you are certain.</span></div>
@@ -1787,22 +2022,53 @@ function RegisterAdminPage({ onAdminAssigned, members }: { onAdminAssigned: (add
   )
 }
 
+// ─── Profile Page (Large View) ────────────────────────────────────────────────
+
+function ProfilePage({ role, shortAddress, address, auth }: {
+  role: Role; shortAddress: string; address: string; auth: AuthState
+}) {
+  const userName = auth.connected && auth.name ? auth.name : `${role} Operator`
+  const userEmail = auth.connected && auth.email ? auth.email : null
+  const authMethod = auth.connected ? (auth.authMethod === 'google' ? 'Google OAuth' : 'MetaMask (SIWE)') : 'Demo session'
+
+  return (
+    <div className="page-content">
+      <SectionHeading eyebrow="Account & Identity" title="Profile" />
+      <div className="settings-grid" style={{ gridTemplateColumns: '1fr', maxWidth: '780px' }}>
+        <div className="settings-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '22px' }}>
+            <div className="avatar" style={{ width: '48px', height: '48px', fontSize: '18px' }}>
+              {shortAddress.slice(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <h3 style={{ margin: '0 0 4px', fontSize: '18px' }}>{userName}</h3>
+              <p style={{ margin: 0, color: 'var(--muted)', fontSize: '12px' }}>
+                {userEmail ? `${userEmail} · ` : ''}DataVault Protocol Operator
+              </p>
+            </div>
+          </div>
+          <div className="settings-row"><span>Active role</span><strong><RoleBadge role={role} /></strong></div>
+          {userName && <div className="settings-row"><span>User name</span><strong>{userName}</strong></div>}
+          {userEmail && <div className="settings-row"><span>Email</span><strong>{userEmail}</strong></div>}
+          <div className="settings-row"><span>Wallet address</span><strong className="hash">{address || shortAddress}</strong></div>
+          <div className="settings-row"><span>DID</span><strong className="hash">did:ethr:{address || shortAddress}</strong></div>
+          <div className="settings-row"><span>Authentication</span><strong>{authMethod}</strong></div>
+          <div className="settings-row"><span>Role description</span><strong>{roleMeta[role].description}</strong></div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Settings Page ────────────────────────────────────────────────────────────
 
-function SettingsPage({ role, theme, setTheme, shortAddress }: {
-  role: Role; theme: 'dark' | 'light'; setTheme: (t: 'dark' | 'light') => void; shortAddress: string
+function SettingsPage({ theme, setTheme }: {
+  theme: 'dark' | 'light'; setTheme: (t: 'dark' | 'light') => void
 }) {
   return (
     <div className="page-content">
       <SectionHeading eyebrow="Configuration" title="Settings" />
       <div className="settings-grid">
-        <div className="settings-card">
-          <h3>Profile</h3>
-          <p>Your identity and role configuration on the DataVault protocol.</p>
-          <div className="settings-row"><span>Active role</span><strong><RoleBadge role={role} /></strong></div>
-          <div className="settings-row"><span>Wallet address</span><strong className="hash">{shortAddress}</strong></div>
-          <div className="settings-row"><span>DID</span><strong className="hash">did:ethr:{shortAddress}</strong></div>
-        </div>
         <div className="settings-card">
           <h3>Network</h3>
           <p>Blockchain network and protocol connection details.</p>
@@ -1839,7 +2105,7 @@ function SettingsPage({ role, theme, setTheme, shortAddress }: {
 
 function App() {
   const { auth, connecting, error, showModal, setShowModal, connectWallet, handleGoogleCredential, connectAsRegisteredUser, disconnect } = useAuth()
-  const [role, setRole] = useState<Role>('Admin')
+  const [role, setRole] = useState<Role>('User')
   const [page, setPage] = useState('overview')
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -2008,6 +2274,7 @@ function App() {
   // Role-gate: redirect to overview if current page not allowed
   const effectivePage = useMemo(() => {
     if (page === 'settings') return 'settings'
+    if (page === 'profile') return 'profile'
     const allowed = nav.find(n => n.id === page)?.roles ?? []
     return allowed.includes(role) ? page : 'overview'
   }, [page, role])
@@ -2047,9 +2314,16 @@ function App() {
       )
     }
     if (effectivePage === 'register-admin') return <RegisterAdminPage onAdminAssigned={handleAdminAssigned} members={memberList} />
-    if (effectivePage === 'settings') return <SettingsPage role={role} theme={theme} setTheme={setTheme} shortAddress={shortAddress} />
+    if (effectivePage === 'profile') return <ProfilePage role={role} shortAddress={shortAddress} address={address} auth={auth} />
+    if (effectivePage === 'settings') return <SettingsPage theme={theme} setTheme={setTheme} />
     return <Overview role={role} onSelect={setSelectedAsset} address={address} auditEntries={auditList} assetList={assetList} onNavigate={setPage} />
-  }, [effectivePage, role, address, assetList, memberList, auditList, theme, shortAddress])
+  }, [effectivePage, role, address, assetList, memberList, auditList, theme, shortAddress, auth])
+
+  const handleSignOut = useCallback(() => {
+    disconnect()
+    setRole('User')
+    setPage('overview')
+  }, [disconnect])
 
   // Show landing + modal when not connected
   if (!auth.connected) {
@@ -2084,7 +2358,7 @@ function App() {
     <div className="app-shell" data-theme={theme}>
       <Sidebar role={role} page={effectivePage} setPage={setPage} open={menuOpen} onClose={() => setMenuOpen(false)} shortAddress={shortAddress} />
       <div className="main-shell">
-        <Topbar role={role} setRole={setRole} onMenu={() => setMenuOpen(true)} theme={theme} setTheme={setTheme} shortAddress={shortAddress} onDisconnect={disconnect} />
+        <Topbar role={role} setRole={setRole} authRole={auth.connected && auth.role ? ({ ADMIN: 'Admin', MANAGER: 'Manager', AUDITOR: 'Auditor', USER: 'User' } as Record<string, Role>)[auth.role as string] ?? 'User' : 'User'} onMenu={() => setMenuOpen(true)} theme={theme} setTheme={setTheme} shortAddress={shortAddress} onNavigate={setPage} auditEntries={auditList} onSignOut={handleSignOut} />
         <main className="app-main">{view}</main>
       </div>
 
